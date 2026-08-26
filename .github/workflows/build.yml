@@ -1,4 +1,4 @@
-name: Build HealthBoost roothide deb
+name: Build HealthBoost roothide deb with App
 
 on:
   push:
@@ -25,11 +25,30 @@ jobs:
             -o HealthBoost \
             src/HealthBoostDaemon.m
       
-      - name: Verify binary
+      - name: Verify daemon binary
         run: |
           file HealthBoost
           ls -la HealthBoost
           head -c 4 HealthBoost | xxd
+      
+      - name: Compile iOS App
+        run: |
+          xcrun --sdk iphoneos clang \
+            -framework UIKit \
+            -framework Foundation \
+            -arch arm64 -arch arm64e \
+            -mios-version-min=13.0 \
+            -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+            -o HealthBoostApp \
+            HealthBoostApp/HealthBoostApp.m
+      
+      - name: Create App bundle
+        run: |
+          mkdir -p HealthBoost.app
+          cp HealthBoostApp HealthBoost.app/HealthBoost
+          chmod 755 HealthBoost.app/HealthBoost
+          cp -r HealthBoostApp/HealthBoost/* HealthBoost.app/ 2>/dev/null || true
+          ls -la HealthBoost.app/
       
       - name: Build package
         run: bash build.sh
