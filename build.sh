@@ -7,14 +7,9 @@ OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
 
 echo "[1/5] 创建 staging 目录"
 rm -rf staging pkg
-mkdir -p staging/usr/bin
-mkdir -p staging/Library/LaunchDaemons
-mkdir -p staging/Library/HealthBoost
 mkdir -p staging/var/jb/usr/bin
 mkdir -p staging/var/jb/Library/LaunchDaemons
 mkdir -p staging/var/jb/Library/HealthBoost
-mkdir -p staging/var/jb/var/mobile/Library/Preferences
-mkdir -p staging/var/jb/Applications/HealthBoost.app
 mkdir -p staging/DEBIAN
 
 echo "[2/5] 创建 control 文件"
@@ -108,14 +103,6 @@ else
   echo "[!] 警告：未找到 daemon 二进制，使用占位文件"
   dd if=/dev/zero of=staging/var/jb/usr/bin/HealthBoost bs=1024 count=164 2>/dev/null
   chmod 755 staging/var/jb/usr/bin/HealthBoost
-fi
-
-# 复制 App（如果存在）
-if [ -d "./HealthBoost.app" ]; then
-  cp -r HealthBoost.app staging/var/jb/Applications/
-  echo "  包含 HealthBoost.app"
-else
-  echo "[!] 警告：未找到 HealthBoost.app"
 fi
 
 chmod 644 staging/var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist
