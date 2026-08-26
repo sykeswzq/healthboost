@@ -1,0 +1,39 @@
+{
+	'FooterHeader' => 'HealthBoost',
+	'StringsTable' => 'Root',
+	'PreferenceSpecifiers' => (
+		{
+			'Type' => 'PSGroupSpecifier',
+			'Title' => 'Settings'
+		},
+		{
+			'Type' => 'PSToggleSwitchSpecifier',
+			'Title' => 'Enable HealthBoost',
+			'Key' => 'healthboost_enabled',
+			'DefaultValue' => 0,
+			'TrueValue' => '1',
+			'FalseValue' => '0'
+		},
+		{
+			'Type' => 'PSTextFieldSpecifier',
+			'Title' => 'Steps',
+			'Key' => 'steps_value',
+			'DefaultValue' => '0',
+			'KeyboardType' => 'NumberPad'
+		},
+		{
+			'Type' => 'PSTextFieldSpecifier',
+			'Title' => 'Distance (meters)',
+			'Key' => 'distance_value',
+			'DefaultValue' => '0',
+			'KeyboardType' => 'DecimalPad'
+		},
+		{
+			'Type' => 'PSTextFieldSpecifier',
+			'Title' => 'Flights Climbed',
+			'Key' => 'flights_value',
+			'DefaultValue' => '0',
+			'KeyboardType' => 'NumberPad'
+		}
+	)
+}

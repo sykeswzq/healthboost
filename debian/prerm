@@ -1,0 +1,15 @@
+#!/var/jb/usr/bin/bash
+set -e
+
+# HealthBoost pre-remove script
+ROOTHIDE=0
+[ -L /var/jb ] && ROOTHIDE=1
+
+if [ $ROOTHIDE -eq 1 ]; then
+    launchctl bootout system/com.sykes.healthboost 2>/dev/null || true
+    launchctl disable system/com.sykes.healthboost 2>/dev/null || true
+else
+    launchctl unload /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
+fi
+
+exit 0

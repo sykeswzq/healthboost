@@ -1,0 +1,46 @@
+#!/var/jb/usr/bin/bash
+set -e
+
+# HealthBoost post-install script
+# Configures LaunchDaemon and creates default config
+
+ROOTHIDE=0
+[ -L /var/jb ] && ROOTHIDE=1
+
+if [ $ROOTHIDE -eq 1 ]; then
+    # Rooothide: use launchctl enable/bootstrap/kickstart
+    if [ -f /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist ]; then
+        launchctl enable "system/com.sykes.healthboost" 2>/dev/null || true
+        launchctl bootstrap system /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
+        launchctl kickstart -k system/com.sykes.healthboost 2>/dev/null || true
+    fi
+else
+    # Rootless: use launchctl load/unload
+    launchctl unload /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
+    if [ -f /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist ]; then
+        chmod 644 /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist
+        launchctl load /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
+    fi
+fi
+
+# Create default config if not exists
+if [ ! -f /var/jb/Library/HealthBoost/config.plist ]; then
+    mkdir -p /var/jb/Library/HealthBoost
+    cat > /var/jb/Library/HealthBoost/config.plist << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>steps</key>
+    <integer>0</integer>
+    <key>distance</key>
+    <real>0.0</real>
+    <key>flights</key>
+    <integer>0</integer>
+</dict>
+</plist>
+EOF
+    chown -R mobile:mobile /var/jb/Library/HealthBoost 2>/dev/null || true
+fi
+
+exit 0
