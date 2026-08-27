@@ -10,39 +10,31 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Install dpkg
-        run: brew install dpkg
-      
-      - name: Compile daemon binary
+
+      - name: Install build tools
         run: |
-          xcrun --sdk iphoneos clang \
-            -framework HealthKit \
-            -framework Foundation \
-            -arch arm64 -arch arm64e \
-            -mios-version-min=13.0 \
-            -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
-            -o HealthBoost \
-            src/HealthBoostDaemon.m
-      
+          brew install dpkg
+          brew install ldid || echo "ldid install failed, continuing without signing"
+
+      - name: Build package (daemon + app)
+        run: bash build.sh
+
       - name: Verify binary
         run: |
-          file HealthBoost
-          ls -la HealthBoost
-          head -c 4 HealthBoost | xxd
-      
-      - name: Build package
-        run: bash build.sh
-      
+          echo "=== deb contents ==="
+          dpkg-deb -c com.sykes.healthboost_1.0.0-1_iphoneos-arm64e.deb
+          echo "=== app executable header ==="
+          mkdir -p /tmp/hbcheck
+          dpkg-deb -x com.sykes.healthboost_1.0.0-1_iphoneos-arm64e.deb /tmp/hbcheck
+          APPBIN=/tmp/hbcheck/var/jb/Applications/HealthBoost.app/HealthBoostApp
+          DAEMON=/tmp/hbcheck/var/jb/usr/bin/HealthBoost
+          ls -la "$APPBIN" "$DAEMON"
+          echo "app header: $(head -c 4 "$APPBIN" | xxd -p)"
+          echo "daemon header: $(head -c 4 /tmp/hbcheck/var/jb/usr/bin/HealthBoost | xxd -p)"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: healthboost-deb
           path: com.sykes.healthboost_1.0.0-1_iphoneos-arm64e.deb
           retention-days: 30
-      
-      - name: Show build info
-        run: |
-          echo "=== Build Complete ==="
-          ls -la *.deb
-          dpkg-deb -f com.sykes.healthboost_1.0.0-1_iphoneos-arm64e.deb

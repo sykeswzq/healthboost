@@ -5,60 +5,81 @@ VER="1.0.0-1"
 PKG="com.sykes.healthboost"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
 
-echo "[1/5] 创建 staging 目录"
+echo "[1/6] 创建 staging 目录"
 rm -rf staging pkg
 mkdir -p staging/var/jb/usr/bin
 mkdir -p staging/var/jb/Library/LaunchDaemons
 mkdir -p staging/var/jb/Library/HealthBoost
+mkdir -p staging/var/jb/Applications/HealthBoost.app
 mkdir -p staging/DEBIAN
 
-echo "[2/5] 创建 control 文件"
+SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+
+echo "[2/6] 编译 daemon 守护进程"
+xcrun --sdk iphoneos clang \
+  -framework HealthKit \
+  -framework Foundation \
+  -arch arm64 -arch arm64e \
+  -mios-version-min=13.0 \
+  -isysroot "$SDK" \
+  -o staging/var/jb/usr/bin/HealthBoost \
+  src/HealthBoostDaemon.m
+chmod 755 staging/var/jb/usr/bin/HealthBoost
+echo "  daemon: $(wc -c < staging/var/jb/usr/bin/HealthBoost) bytes"
+
+echo "[3/6] 编译 iOS App (HealthBoost.app)"
+xcrun --sdk iphoneos clang \
+  -framework UIKit \
+  -framework Foundation \
+  -fobjc-arc \
+  -arch arm64 -arch arm64e \
+  -mios-version-min=13.0 \
+  -isysroot "$SDK" \
+  -o staging/var/jb/Applications/HealthBoost.app/HealthBoostApp \
+  HealthBoostApp/HealthBoostApp.m
+chmod 755 staging/var/jb/Applications/HealthBoost.app/HealthBoostApp
+echo "  app: $(wc -c < staging/var/jb/Applications/HealthBoost.app/HealthBoostApp) bytes"
+
+echo "[4/ 6] 拷贝 App 资源"
+cp HealthBoostApp/HealthBoost/Info.plist  staging/var/jb/Applications/HealthBoost.app/
+cp HealthBoostApp/HealthBoost/AppIcon60x60@2x.png staging/var/jb/Applications/HealthBoost.app/
+cp HealthBoostApp/HealthBoost/PkgInfo    staging/var/jb/Applications/HealthBoost.app/
+chmod 644 staging/var/jb/Applications/HealthBoost.app/Info.plist
+chmod 644 staging/var/jb/Applications/HealthBoost.app/AppIcon60x60@2x.png
+chmod 644 staging/var/jb/Applications/HealthBoost.app/PkgInfo
+
+# 签名（ldid 可用时）
+if command -v ldid >/dev/null 2>&1; then
+  ldid -S staging/var/jb/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null || true
+  ldid -S staging/var/jb/usr/bin/HealthBoost 2>/dev/null || true
+  echo "  已用 ldid 签名"
+else
+  echo "  [info] ldid 不可用，跳过签名（越狱环境可运行未签名二进制）"
+fi
+
+echo "[5/6] 创建 control / postinst / prerm"
 cat > staging/DEBIAN/control << 'EOF'
 Package: com.sykes.healthboost
 Name: HealthBoost
 Version: 1.0.0-1
 Architecture: iphoneos-arm64e
-Installed-Size: 200
+Installed-Size: 400
 Depends: firmware (>= 13.0)
 Maintainer: sykeswzq
 Author: sykeswzq
-Description: Modifies Apple Health data (steps, distance, flights climbed)
+Description: Modifies Apple Health data (steps, distance, flights climbed). Includes desktop app.
 Section: utilities
 Priority: optional
 EOF
 
-echo "[3/5] 创建 postinst/prerm 脚本"
 cat > staging/DEBIAN/postinst << 'EOF'
 #!/var/jb/usr/bin/bash
 PLIST=/var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist
 LABEL=com.sykes.healthboost
 
-# roothide 检测
-if [ -L /var/jb ]; then
-  ROOTHIDE=1
-else
-  ROOTHIDE=0
-fi
+ROOTHIDE=0
+[ -L /var/jb ] && ROOTHIDE=1
 
-stop_daemon() {
-  if [ "$ROOTHIDE" = "1" ]; then
-    launchctl disable "system/$LABEL" 2>/dev/null || true
-    launchctl bootout "system/$LABEL" 2>/dev/null || true
-  fi
-  launchctl unload "$PLIST" 2>/dev/null || true
-}
-
-start_daemon() {
-  if [ "$ROOTHIDE" = "1" ]; then
-    launchctl enable "system/$LABEL" 2>/dev/null || true
-    launchctl bootstrap system "$PLIST" 2>/dev/null || true
-    launchctl kickstart -k "system/$LABEL" 2>/dev/null || true
-  else
-    launchctl load "$PLIST" 2>/dev/null || true
-  fi
-}
-
-# 创建默认配置
 mkdir -p /var/jb/Library/HealthBoost
 if [ ! -f /var/jb/Library/HealthBoost/config.plist ]; then
   cat > /var/jb/Library/HealthBoost/config.plist << 'PLISTEOF'
@@ -79,7 +100,16 @@ if [ ! -f /var/jb/Library/HealthBoost/config.plist ]; then
 PLISTEOF
 fi
 
-start_daemon
+if [ "$ROOTHIDE" = "1" ]; then
+  launchctl enable "system/$LABEL" 2>/dev/null || true
+  launchctl bootstrap system "$PLIST" 2>/dev/null || true
+  launchctl kickstart -k "system/$LABEL" 2>/dev/null || true
+else
+  launchctl load "$PLIST" 2>/dev/null || true
+fi
+
+# 刷新主屏幕，让 App 图标出现
+sbreload 2>/dev/null || uicache 2>/dev/null || killall -9 backboardd 2>/dev/null || true
 exit 0
 EOF
 
@@ -91,23 +121,10 @@ EOF
 
 chmod 755 staging/DEBIAN/postinst staging/DEBIAN/prerm
 
-echo "[4/5] 复制文件到 staging"
+echo "[6/6] 拷贝 daemon plist 并打包"
 cp com.sykes.healthboost.plist staging/var/jb/Library/LaunchDaemons/
-
-# 使用已编译的二进制（由 workflow 编译）
-if [ -f "./HealthBoost" ]; then
-  cp ./HealthBoost staging/var/jb/usr/bin/
-  chmod 755 staging/var/jb/usr/bin/HealthBoost
-  echo "  使用已编译的 daemon 二进制"
-else
-  echo "[!] 警告：未找到 daemon 二进制，使用占位文件"
-  dd if=/dev/zero of=staging/var/jb/usr/bin/HealthBoost bs=1024 count=164 2>/dev/null
-  chmod 755 staging/var/jb/usr/bin/HealthBoost
-fi
-
 chmod 644 staging/var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist
 
-echo "[5/5] 打包 deb (dpkg-deb -b -Zgzip)"
 dpkg-deb -b -Zgzip staging "$OUT"
 echo "  -> $(ls -lh "$OUT" | awk '{print $5}') bytes"
 echo "  Architecture: $(dpkg-deb -f "$OUT" Architecture)"
