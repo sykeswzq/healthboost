@@ -14,7 +14,8 @@ jobs:
       - name: Install build tools
         run: |
           brew install dpkg
-          brew install ldid || echo "ldid install failed, continuing without signing"
+          brew install ldid-procursus 2>/dev/null || brew install procursus/ldid/ldid 2>/dev/null || { echo "ERROR: ldid install failed"; exit 1; }
+          command -v ldid && ldid --version || { echo "ERROR: ldid still not available"; exit 1; }
 
       - name: Build package (daemon + app)
         run: bash build.sh
@@ -27,10 +28,10 @@ jobs:
           mkdir -p /tmp/hbcheck
           dpkg-deb -x com.sykes.healthboost_1.0.0-1_iphoneos-arm64e.deb /tmp/hbcheck
           APPBIN=/tmp/hbcheck/var/jb/Applications/HealthBoost.app/HealthBoostApp
-          DAEMON=/tmp/hbcheck/var/jb/usr/bin/HealthBoost
-          ls -la "$APPBIN" "$DAEMON"
+          ls -la "$APPBIN"
           echo "app header: $(head -c 4 "$APPBIN" | xxd -p)"
-          echo "daemon header: $(head -c 4 /tmp/hbcheck/var/jb/usr/bin/HealthBoost | xxd -p)"
+          echo "=== app entitlements (确认含 no-sandbox) ==="
+          ldid -e "$APPBIN" 2>/dev/null | grep -E "no-sandbox|healthkit" || echo "WARN: no-sandbox/healthkit not found in entitlements"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

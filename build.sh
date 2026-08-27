@@ -5,32 +5,19 @@ VER="1.0.0-1"
 PKG="com.sykes.healthboost"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
 
-echo "[1/6] 创建 staging 目录"
+echo "[1/5] 创建 staging 目录"
 rm -rf staging pkg
-mkdir -p staging/var/jb/usr/bin
-mkdir -p staging/var/jb/Library/LaunchDaemons
 mkdir -p staging/var/jb/Library/HealthBoost
 mkdir -p staging/var/jb/Applications/HealthBoost.app
 mkdir -p staging/DEBIAN
 
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
-echo "[2/6] 编译 daemon 守护进程"
-xcrun --sdk iphoneos clang \
-  -framework HealthKit \
-  -framework Foundation \
-  -arch arm64 -arch arm64e \
-  -mios-version-min=13.0 \
-  -isysroot "$SDK" \
-  -o staging/var/jb/usr/bin/HealthBoost \
-  src/HealthBoostDaemon.m
-chmod 755 staging/var/jb/usr/bin/HealthBoost
-echo "  daemon: $(wc -c < staging/var/jb/usr/bin/HealthBoost) bytes"
-
-echo "[3/6] 编译 iOS App (HealthBoost.app)"
+echo "[2/5] 编译 iOS App (HealthBoost.app)"
 xcrun --sdk iphoneos clang \
   -framework UIKit \
   -framework Foundation \
+  -framework HealthKit \
   -fobjc-arc \
   -arch arm64 -arch arm64e \
   -mios-version-min=13.0 \
@@ -40,7 +27,7 @@ xcrun --sdk iphoneos clang \
 chmod 755 staging/var/jb/Applications/HealthBoost.app/HealthBoostApp
 echo "  app: $(wc -c < staging/var/jb/Applications/HealthBoost.app/HealthBoostApp) bytes"
 
-echo "[4/ 6] 拷贝 App 资源"
+echo "[3/5] 拷贝 App 资源"
 cp HealthBoostApp/HealthBoost/Info.plist  staging/var/jb/Applications/HealthBoost.app/
 cp HealthBoostApp/HealthBoost/AppIcon60x60@2x.png staging/var/jb/Applications/HealthBoost.app/
 cp HealthBoostApp/HealthBoost/PkgInfo    staging/var/jb/Applications/HealthBoost.app/
@@ -48,20 +35,26 @@ chmod 644 staging/var/jb/Applications/HealthBoost.app/Info.plist
 chmod 644 staging/var/jb/Applications/HealthBoost.app/AppIcon60x60@2x.png
 chmod 644 staging/var/jb/Applications/HealthBoost.app/PkgInfo
 
-# 签名（ldid 可用时）
-if command -v ldid >/dev/null 2>&1; then
-  if [ -f HealthBoost.entitlements.plist ]; then
-    ldid -SHealthBoost.entitlements.plist staging/var/jb/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null || true
-  else
-    ldid -S staging/var/jb/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null || true
-  fi
-  ldid -S staging/var/jb/usr/bin/HealthBoost 2>/dev/null || true
-  echo "  已用 ldid 签名"
+echo "[4/5] 签名 (ldid 必须带 healthkit 权限，否则 App 无法写入 Apple Health)"
+if ! command -v ldid >/dev/null 2>&1; then
+  echo "ERROR: ldid 未安装，App 无法签名 healthkit 权限，终止构建"
+  exit 1
+fi
+if [ ! -f HealthBoost.entitlements.plist ]; then
+  echo "ERROR: HealthBoost.entitlements.plist 缺失，终止构建"
+  exit 1
+fi
+ldid -SHealthBoost.entitlements.plist staging/var/jb/Applications/HealthBoost.app/HealthBoostApp
+echo "  已用 ldid 签名 App (含 healthkit)"
+# 验证签名确实带 healthkit 权限
+if ldid -e staging/var/jb/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null | grep -q "healthkit"; then
+  echo "  验证通过: entitlements 含 healthkit"
 else
-  echo "  [info] ldid 不可用，跳过签名（越狱环境可运行未签名二进制）"
+  echo "ERROR: 签名后未检测到 healthkit，App 无法写入健康数据"
+  exit 1
 fi
 
-echo "[5/6] 创建 control / postinst / prerm"
+echo "[5/5] 创建 control / postinst / prerm / postrm 并打包"
 cat > staging/DEBIAN/control << 'EOF'
 Package: com.sykes.healthboost
 Name: HealthBoost
@@ -71,103 +64,47 @@ Installed-Size: 400
 Depends: firmware (>= 13.0)
 Maintainer: sykeswzq
 Author: sykeswzq
-Description: Modifies Apple Health data (steps, distance, flights climbed). Includes desktop app.
+Description: Modifies Apple Health data (steps, distance, flights climbed). Desktop app.
 Section: utilities
 Priority: optional
 EOF
 
 cat > staging/DEBIAN/postinst << 'EOF'
 #!/bin/sh
-PLIST=/var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist
-LABEL=com.sykes.healthboost
-
-ROOTHIDE=0
-[ -L /var/jb ] && ROOTHIDE=1
-
-mkdir -p /var/jb/Library/HealthBoost
-if [ ! -f /var/jb/Library/HealthBoost/config.plist ]; then
-  cat > /var/jb/Library/HealthBoost/config.plist << 'PLISTEOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>enabled</key>
-    <true/>
-    <key>steps</key>
-    <integer>1000</integer>
-    <key>ratio</key>
-    <real>0.7</real>
-    <key>distance</key>
-    <real>700.0</real>
-    <key>flights</key>
-    <integer>5</integer>
-</dict>
-</plist>
-PLISTEOF
-fi
-
-# 确保 App（mobile 用户）能读写配置；目录和文件都放开权限
-chown -R mobile:mobile /var/jb/Library/HealthBoost 2>/dev/null || true
-chmod 777 /var/jb/Library/HealthBoost 2>/dev/null || true
-chmod 666 /var/jb/Library/HealthBoost/config.plist 2>/dev/null || true
-
-if [ "$ROOTHIDE" = "1" ]; then
-  launchctl enable "system/$LABEL" 2>/dev/null || true
-  launchctl bootstrap system "$PLIST" 2>/dev/null || true
-  launchctl kickstart -k "system/$LABEL" 2>/dev/null || true
-else
-  launchctl load "$PLIST" 2>/dev/null || true
-fi
-
-# 刷新主屏幕，让 App 图标出现
-# 先尝试带路径的 uicache，再回退到 sbreload / 全局 uicache / 重启 backboardd
+# 刷新图标缓存。只用 uicache（仅重建图标数据库，不杀 SpringBoard），
+# 绝不用 sbreload / killall backboardd —— 安装器 Sileo 跑在 SpringBoard 里，
+# 杀掉它会导致 dpkg 被中断。
 if [ -x /var/jb/usr/bin/uicache ]; then
   /var/jb/usr/bin/uicache -p /var/jb/Applications/HealthBoost.app 2>/dev/null || true
-fi
-if [ -x /usr/bin/uicache ]; then
+  /var/jb/usr/bin/uicache -a 2>/dev/null || true
+elif [ -x /usr/bin/uicache ]; then
   /usr/bin/uicache -p /var/jb/Applications/HealthBoost.app 2>/dev/null || true
+  /usr/bin/uicache -a 2>/dev/null || true
 fi
-/var/jb/usr/bin/sbreload 2>/dev/null || sbreload 2>/dev/null || /var/jb/usr/bin/uicache -a 2>/dev/null || uicache -a 2>/dev/null || killall -9 backboardd 2>/dev/null || true
 exit 0
 EOF
 
 cat > staging/DEBIAN/prerm << 'EOF'
-#!/var/jb/usr/bin/bash
-# 卸载前停止守护进程
-ROOTHIDE=0
-[ -L /var/jb ] && ROOTHIDE=1
-if [ "$ROOTHIDE" = "1" ]; then
-  launchctl bootout system/com.sykes.healthboost 2>/dev/null || true
-  launchctl disable system/com.sykes.healthboost 2>/dev/null || true
-else
-  launchctl unload /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
-fi
+#!/bin/sh
+# 卸载旧版可能遗留的守护进程（新版本已无 daemon）
+launchctl unload /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
+launchctl unload /Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
 exit 0
 EOF
 
 cat > staging/DEBIAN/postrm << 'EOF'
-#!/var/jb/usr/bin/bash
-# 卸载后刷新图标缓存，防止桌面残留 App 图标
-APP=/var/jb/Applications/HealthBoost.app
+#!/bin/sh
+# 卸载后刷新图标缓存，让桌面图标消失。仅用 uicache，不杀 SpringBoard。
 if [ -x /var/jb/usr/bin/uicache ]; then
-  /var/jb/usr/bin/uicache -p "$APP" 2>/dev/null || true
   /var/jb/usr/bin/uicache -a 2>/dev/null || true
-fi
-if [ -x /usr/bin/uicache ]; then
-  /usr/bin/uicache -p "$APP" 2>/dev/null || true
+elif [ -x /usr/bin/uicache ]; then
   /usr/bin/uicache -a 2>/dev/null || true
 fi
-/var/jb/usr/bin/sbreload 2>/dev/null || sbreload 2>/dev/null || killall -9 backboardd 2>/dev/null || true
 exit 0
 EOF
 
 chmod 755 staging/DEBIAN/postinst staging/DEBIAN/prerm staging/DEBIAN/postrm
 
-echo "[6/6] 拷贝 daemon plist 并打包"
-cp com.sykes.healthboost.plist staging/var/jb/Library/LaunchDaemons/
-chmod 644 staging/var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist
-
 dpkg-deb -b -Zgzip staging "$OUT"
 echo "  -> $(ls -lh "$OUT" | awk '{print $5}') bytes"
-echo "  Architecture: $(dpkg-deb -f "$OUT" Architecture)"
 echo "DONE: $OUT"

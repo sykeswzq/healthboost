@@ -1,76 +1,9 @@
-// HealthBoost - iOS App for setting steps / distance / floors and triggering daemon
+// HealthBoost - iOS App that writes steps / distance / flights directly to Apple Health
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
-#include <spawn.h>
-#include <sys/wait.h>
+#import <HealthKit/HealthKit.h>
 
-static void hb_run(const char *cmd) {
-    pid_t pid;
-    const char *argv[] = {"/bin/sh", "-c", cmd, NULL};
-    if (posix_spawn(&pid, "/bin/sh", NULL, NULL, (char * const *)argv, NULL) == 0) {
-        int status;
-        waitpid(pid, &status, 0);
-    }
-}
-
-static NSString *HBConfigPath(void) {
-    return @"/var/jb/Library/HealthBoost/config.plist";
-}
-
-static BOOL HBWriteConfig(NSDictionary *config) {
-    NSData *data = [NSPropertyListSerialization dataWithPropertyList:config
-                                                              format:NSPropertyListXMLFormat_v1_0
-                                                             options:0
-                                                               error:nil];
-    if (!data) return NO;
-
-    NSString *path = HBConfigPath();
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *dir = [path stringByDeletingLastPathComponent];
-
-    // 确保目录存在且任何人可写（roothide 下 App 以 mobile 运行，避免依赖目录写权限）
-    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    [fm setAttributes:@{NSFilePosixPermissions: @0777} ofItemAtPath:dir error:nil];
-
-    // 先放开文件权限，确保即使由 root 创建，mobile 也能覆盖写入
-    if ([fm fileExistsAtPath:path]) {
-        [fm setAttributes:@{NSFilePosixPermissions: @0666} ofItemAtPath:path error:nil];
-    }
-
-    // 非原子写：直接覆盖，避免原子写需要在目录内创建临时文件（要求目录写权限）
-    BOOL ok = [data writeToFile:path atomically:NO];
-    if (ok) {
-        [fm setAttributes:@{NSFilePosixPermissions: @0666} ofItemAtPath:path error:nil];
-    }
-    return ok;
-}
-
-static NSDictionary *HBReadConfig(void) {
-    NSData *data = [NSData dataWithContentsOfFile:HBConfigPath()];
-    if (!data) return nil;
-    return [NSPropertyListSerialization propertyListWithData:data options:0 format:nil error:nil];
-}
-
-static double HBDoubleValue(id obj, double fallback) {
-    if (!obj) return fallback;
-    if ([obj isKindOfClass:[NSNumber class]]) return [obj doubleValue];
-    if ([obj isKindOfClass:[NSString class]]) return [obj doubleValue];
-    return fallback;
-}
-
-static long HBIntValue(id obj, long fallback) {
-    if (!obj) return fallback;
-    if ([obj isKindOfClass:[NSNumber class]]) return [obj longValue];
-    if ([obj isKindOfClass:[NSString class]]) return [obj integerValue];
-    return fallback;
-}
-
-static BOOL HBBoolValue(id obj, BOOL fallback) {
-    if (!obj) return fallback;
-    if ([obj isKindOfClass:[NSNumber class]]) return [obj boolValue];
-    if ([obj isKindOfClass:[NSString class]]) return [obj boolValue];
-    return fallback;
-}
+static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 
 // MARK: - Main View Controller
 
@@ -83,6 +16,8 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
 @property (strong, nonatomic) UILabel *ratioLabel;
 @property (strong, nonatomic) UILabel *distanceLabel;
 @property (strong, nonatomic) UIButton *applyButton;
+@property (strong, nonatomic) HKHealthStore *healthStore;
+@property (assign, nonatomic) BOOL busy;
 @end
 
 @implementation HBMainViewController
@@ -208,6 +143,7 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
     self.flightsField.layer.cornerRadius = 10;
     self.flightsField.placeholder = @"手动输入楼层数";
     self.flightsField.delegate = self;
+    [self.flightsField addTarget:self action:@selector(flightsFieldChanged:) forControlEvents:UIControlEventEditingChanged];
     [self.view addSubview:self.flightsField];
     y += 60;
 
@@ -218,11 +154,11 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
     [self.view addSubview:self.applyButton];
     y += 66;
 
-    // Tap to dismiss keyboard
+    // Tapping outside dismisses keyboard
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
     [self.view addGestureRecognizer:tap];
 
-    [self loadConfig];
+    [self loadSettings];
 }
 
 - (CGFloat)addSectionTitle:(NSString *)text y:(CGFloat)y {
@@ -245,58 +181,51 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
     return b;
 }
 
-// MARK: - Config
+// MARK: - Settings (persisted in app sandbox, no /var/jb writes)
 
-- (void)loadConfig {
-    NSDictionary *config = HBReadConfig();
-    if (!config) {
-        // Create default config
-        config = @{
-            @"enabled": @YES,
-            @"steps": @1000,
-            @"ratio": @0.7,
-            @"distance": @700.0,
-            @"flights": @5
-        };
-        HBWriteConfig(config);
+- (void)loadSettings {
+    NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:HBSettingsKey];
+    if (!d) {
+        d = @{@"enabled": @YES, @"steps": @1000, @"ratio": @0.7, @"flights": @5};
     }
+    self.enableSwitch.on = [d[@"enabled"] boolValue];
 
-    self.enableSwitch.on = HBBoolValue(config[@"enabled"], YES);
-
-    long steps = HBIntValue(config[@"steps"], 1000);
+    long steps = [d[@"steps"] longValue];
+    if (steps <= 0) steps = 1000;
     self.stepsField.text = [NSString stringWithFormat:@"%ld", steps];
 
-    double ratio = HBDoubleValue(config[@"ratio"], 0.7);
+    double ratio = [d[@"ratio"] doubleValue];
     if (ratio < 0.5) ratio = 0.5;
     if (ratio > 0.8) ratio = 0.8;
     self.ratioSlider.value = (float)ratio;
     self.ratioLabel.text = [NSString stringWithFormat:@"%.1f", ratio];
 
-    long flights = HBIntValue(config[@"flights"], 5);
+    long flights = [d[@"flights"] longValue];
+    if (flights <= 0) flights = 5;
     self.flightsField.text = [NSString stringWithFormat:@"%ld", flights];
 
     [self updateDistance];
-    [self updateStatus:@"已加载配置"];
+    [self updateStatus:@"就绪"];
 }
 
-- (BOOL)saveCurrentValues {
+- (void)saveSettings {
     long steps = [self.stepsField.text integerValue];
     if (steps < 0) steps = 0;
-
     double ratio = round(self.ratioSlider.value * 10.0) / 10.0;
-    double distanceMeters = steps * ratio;
-
+    if (ratio < 0.5) ratio = 0.5;
+    if (ratio > 0.8) ratio = 0.8;
     long flights = [self.flightsField.text integerValue];
     if (flights < 0) flights = 0;
 
-    NSDictionary *config = @{
+    NSDictionary *d = @{
         @"enabled": @(self.enableSwitch.isOn),
         @"steps": @(steps),
         @"ratio": @(ratio),
-        @"distance": @(distanceMeters),
         @"flights": @(flights)
     };
-    return HBWriteConfig(config);
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud setObject:d forKey:HBSettingsKey];
+    [ud synchronize];
 }
 
 - (void)updateDistance {
@@ -315,10 +244,7 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
 // MARK: - Actions
 
 - (void)enableChanged:(UISwitch *)sender {
-    if (![self saveCurrentValues]) {
-        [self showAlert:@"保存失败" message:@"无法写入配置文件，请检查文件权限"];
-        return;
-    }
+    [self saveSettings];
     [self updateStatus:sender.isOn ? @"已启用" : @"已禁用"];
 }
 
@@ -327,7 +253,7 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
     steps += 100;
     self.stepsField.text = [NSString stringWithFormat:@"%ld", steps];
     [self updateDistance];
-    [self saveCurrentValues];
+    [self saveSettings];
 }
 
 - (void)stepMinusTapped:(UIButton *)sender {
@@ -336,7 +262,7 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
     if (steps < 0) steps = 0;
     self.stepsField.text = [NSString stringWithFormat:@"%ld", steps];
     [self updateDistance];
-    [self saveCurrentValues];
+    [self saveSettings];
 }
 
 - (void)quickStepTapped:(UIButton *)sender {
@@ -344,7 +270,7 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
     steps += sender.tag;
     self.stepsField.text = [NSString stringWithFormat:@"%ld", steps];
     [self updateDistance];
-    [self saveCurrentValues];
+    [self saveSettings];
 }
 
 - (void)stepsFieldChanged:(UITextField *)sender {
@@ -353,48 +279,102 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
 
 - (void)ratioChanged:(UISlider *)sender {
     [self updateDistance];
-    [self saveCurrentValues];
+    [self saveSettings];
 }
 
 - (void)flightsFieldChanged:(UITextField *)sender {
-    [self saveCurrentValues];
+    [self saveSettings];
 }
 
 - (void)applyTapped:(UIButton *)sender {
     [self dismissKeyboard];
-
-    if (![self saveCurrentValues]) {
-        [self showAlert:@"保存失败" message:@"无法写入 /var/jb/Library/HealthBoost/config.plist，请检查文件权限或卸载重装"];
-        return;
-    }
+    if (self.busy) return;
 
     if (!self.enableSwitch.isOn) {
         [self showAlert:@"已禁用" message:@"请先打开上方开关"];
         return;
     }
 
-    [self updateStatus:@"正在写入..."];
+    long steps = [self.stepsField.text integerValue];
+    if (steps < 0) steps = 0;
+    double ratio = round(self.ratioSlider.value * 10.0) / 10.0;
+    if (ratio < 0.5) ratio = 0.5;
+    if (ratio > 0.8) ratio = 0.8;
+    double distanceMeters = steps * ratio;
+    long flights = [self.flightsField.text integerValue];
+    if (flights < 0) flights = 0;
 
-    // Kick daemon
-    hb_run("launchctl kickstart -k system/com.sykes.healthboost 2>/dev/null || true");
+    [self saveSettings];
 
-    // Read back to confirm
-    NSDictionary *config = HBReadConfig();
-    long steps = HBIntValue(config[@"steps"], 0);
-    double distanceMeters = HBDoubleValue(config[@"distance"], 0);
-    double distanceKm = distanceMeters / 1000.0;
-    long flights = HBIntValue(config[@"flights"], 0);
+    if (![HKHealthStore isHealthDataAvailable]) {
+        [self updateStatus:@"此设备不支持健康数据"];
+        [self showAlert:@"不支持" message:@"当前设备不可用 Apple Health"];
+        return;
+    }
 
-    NSString *msg = [NSString stringWithFormat:@"已写入：步数 %ld，距离 %.3f 公里，楼层 %ld", steps, distanceKm, flights];
-    [self updateStatus:msg];
-    [self showAlert:@"完成" message:msg];
+    self.busy = YES;
+    [self updateStatus:@"正在请求健康授权..."];
+    if (!self.healthStore) {
+        self.healthStore = [[HKHealthStore alloc] init];
+    }
+
+    HKQuantityType *stepType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+    HKQuantityType *distType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning];
+    HKQuantityType *flightType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
+    NSSet *shareTypes = [NSSet setWithObjects:stepType, distType, flightType, nil];
+
+    [self.healthStore requestAuthorizationToShareTypes:shareTypes readTypes:nil completion:^(BOOL success, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!success) {
+                self.busy = NO;
+                [self updateStatus:@"健康授权失败"];
+                NSString *msg = error ? error.localizedDescription : @"你可能拒绝了健康数据写入权限。请到 设置 → 隐私与安全 → 健康 → HealthBoost 打开权限。";
+                [self showAlert:@"授权失败" message:msg];
+                return;
+            }
+            [self updateStatus:@"正在写入健康数据..."];
+            [self saveSample:stepType value:(double)steps unit:[HKUnit countUnit] completion:^(BOOL s1, NSError *e1) {
+                [self saveSample:distType value:distanceMeters unit:[HKUnit meterUnit] completion:^(BOOL s2, NSError *e2) {
+                    [self saveSample:flightType value:(double)flights unit:[HKUnit countUnit] completion:^(BOOL s3, NSError *e3) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            self.busy = NO;
+                            BOOL allOK = s1 && s2 && s3;
+                            double km = distanceMeters / 1000.0;
+                            if (allOK) {
+                                NSString *msg = [NSString stringWithFormat:@"已写入 Apple Health：\n步数 %ld\n距离 %.3f 公里\n楼层 %ld", steps, km, flights];
+                                [self updateStatus:@"已写入健康数据"];
+                                [self showAlert:@"完成" message:msg];
+                            } else {
+                                [self updateStatus:@"部分写入失败"];
+                                NSString *detail = [NSString stringWithFormat:@"步数:%@ 距离:%@ 楼层:%@",
+                                                    s1 ? @"OK" : @"失败", s2 ? @"OK" : @"失败", s3 ? @"OK" : @"失败"];
+                                [self showAlert:@"写入未完成" message:detail];
+                            }
+                        });
+                    }];
+                }];
+            }];
+        });
+    }];
+}
+
+- (void)saveSample:(HKQuantityType *)type value:(double)value unit:(HKUnit *)unit completion:(void(^)(BOOL success, NSError *error))completion {
+    HKQuantity *quantity = [HKQuantity quantityWithUnit:unit doubleValue:value];
+    NSDate *now = [NSDate date];
+    HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:type
+                                                              quantity:quantity
+                                                             startDate:now
+                                                               endDate:now];
+    [self.healthStore saveObject:sample withCompletion:^(BOOL success, NSError *error) {
+        if (completion) completion(success, error);
+    }];
 }
 
 // MARK: - UITextFieldDelegate
 
 - (void)textFieldDidEndEditing:(UITextField *)textField {
     [self updateDistance];
-    [self saveCurrentValues];
+    [self saveSettings];
 }
 
 - (BOOL)textField:(UITextField *)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string {
