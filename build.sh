@@ -126,11 +126,35 @@ EOF
 
 cat > staging/DEBIAN/prerm << 'EOF'
 #!/var/jb/usr/bin/bash
-launchctl unload /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
+# 卸载前停止守护进程
+ROOTHIDE=0
+[ -L /var/jb ] && ROOTHIDE=1
+if [ "$ROOTHIDE" = "1" ]; then
+  launchctl bootout system/com.sykes.healthboost 2>/dev/null || true
+  launchctl disable system/com.sykes.healthboost 2>/dev/null || true
+else
+  launchctl unload /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
+fi
 exit 0
 EOF
 
-chmod 755 staging/DEBIAN/postinst staging/DEBIAN/prerm
+cat > staging/DEBIAN/postrm << 'EOF'
+#!/var/jb/usr/bin/bash
+# 卸载后刷新图标缓存，防止桌面残留 App 图标
+APP=/var/jb/Applications/HealthBoost.app
+if [ -x /var/jb/usr/bin/uicache ]; then
+  /var/jb/usr/bin/uicache -p "$APP" 2>/dev/null || true
+  /var/jb/usr/bin/uicache -a 2>/dev/null || true
+fi
+if [ -x /usr/bin/uicache ]; then
+  /usr/bin/uicache -p "$APP" 2>/dev/null || true
+  /usr/bin/uicache -a 2>/dev/null || true
+fi
+/var/jb/usr/bin/sbreload 2>/dev/null || sbreload 2>/dev/null || killall -9 backboardd 2>/dev/null || true
+exit 0
+EOF
+
+chmod 755 staging/DEBIAN/postinst staging/DEBIAN/prerm staging/DEBIAN/postrm
 
 echo "[6/6] 拷贝 daemon plist 并打包"
 cp com.sykes.healthboost.plist staging/var/jb/Library/LaunchDaemons/
