@@ -7,7 +7,7 @@
 
 static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 
-// MARK: - Helper: create a HKQuantitySample with device source revision
+// MARK: - Helper: create HKQuantitySample with device source via KVC
 
 static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
                                            HKQuantity *quantity,
@@ -15,42 +15,21 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
                                            NSDate *end,
                                            HKSourceRevision *deviceSourceRev) {
     HKDevice *device = [HKDevice localDevice];
-    HKQuantitySample *sample = nil;
+    HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:type
+                                                              quantity:quantity
+                                                           startDate:start
+                                                             endDate:end
+                                                               device:device
+                                                           metadata:nil];
+    if (!sample) return nil;
+    // KVC 注入私有 ivar _sourceRevision，让 healthd 接受设备源
     if (deviceSourceRev) {
-        // 尝试私有初始化器：quantitySampleWithType:quantity:startDate:endDate:sourceRevision:metadata:
-        static SEL privateSel = NULL;
-        static dispatch_once_t once;
-        dispatch_once(&once, ^{
-            privateSel = NSSelectorFromString(@"quantitySampleWithType:quantity:startDate:endDate:sourceRevision:metadata:");
-        });
-        if (privateSel && [HKQuantitySample instancesRespondToSelector:privateSel]) {
-            sample = [HKQuantitySample performSelector:privateSel
-                                             withObject:type
-                                             withObject:quantity
-                                             withObject:start
-                                             withObject:end
-                                             withObject:[deviceSourceRev copy]
-                                             withObject:nil];
+        @try {
+            [sample setValue:[deviceSourceRev copy] forKey:@"_sourceRevision"];
+        } @catch (NSException *e) {
+            (void)e;
+            // 回退：不注入 sourceRevision
         }
-        if (!sample) {
-            @try {
-                sample = [HKQuantitySample quantitySampleWithType:type
-                                                          quantity:quantity
-                                                       startDate:start
-                                                         endDate:end
-                                                            device:device
-                                                        metadata:nil];
-                if (sample) [sample setValue:[deviceSourceRev copy] forKeyPath:@"sourceRevision"];
-            } @catch (NSException *e) { (void)e; }
-        }
-    }
-    if (!sample) {
-        sample = [HKQuantitySample quantitySampleWithType:type
-                                                  quantity:quantity
-                                               startDate:start
-                                                 endDate:end
-                                                    device:device
-                                                metadata:nil];
     }
     return sample;
 }
@@ -338,7 +317,8 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     HKQuantityType *distType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning];
     HKQuantityType *flightType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
     NSSet *shareTypes = [NSSet setWithObjects:stepType, distType, flightType, nil];
-    // authorization_bypass entitlement 允许静默授权（不弹系统弹窗）
+
+    // 方案3: 静默授权（source_override + authorization_bypass）
     [self.healthStore requestAuthorizationToShareTypes:shareTypes
                                                 readTypes:nil
                                              completion:^(BOOL success, NSError *error) {
@@ -346,7 +326,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
             if (!success) {
                 self.busy = NO;
                 [self updateStatus:@"健康授权失败"];
-                NSString *msg = error ? error.localizedDescription : @"你可能拒绝了健康数据写入权限。请到 设置 → 隐私与安全 → 健康 → HealthBoost 打开权限。";
+                NSString *msg = error ? error.localizedDescription : @"授权失败";
                 [self showAlert:@"授权失败" message:msg];
                 return;
             }
@@ -382,8 +362,8 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
             if (!r) continue;
             NSString *bid = r.source.bundleIdentifier;
             // 设备源的 bundleIdentifier 通常为 nil（原生 iPhone 产生）
-            // 优先选 nil；其次选 com.apple.health.*（健康 App 编辑但仍来自设备）
             if (bid == nil) { found = r; break; }
+            // 其次选 com.apple.health.*（健康 App 编辑但仍来自设备）
             if ([bid hasPrefix:@"com.apple.health."] && !found) { found = r; }
         }
         if (completion) completion(found);
@@ -394,10 +374,9 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 // MARK: - Sequential write: step -> distance -> flights
 
 // 每次写之前：
-//   1) 查出当天所有「设备源」样本总值
-//   2) 删掉当天所有「设备源」样本（防止累加）
+//   1) 查询当天所有样本，按来源分组
+//   2) 删除所有非本 App 源的样本（即设备源样本），清空源
 //   3) 串行写入新样本
-// 注意：只删「设备源」样本，不删本 App 源样本（因为源_override 生效后写入的就是设备源）
 - (void)writeSamplesSequentially:(HKSourceRevision *)deviceRev
                        stepCount:(long)steps
                      distanceM:(double)distanceMeters
@@ -405,23 +384,32 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     NSDate *now = [NSDate date];
     NSCalendar *cal = [NSCalendar currentCalendar];
     NSDate *startOfDay = [cal startOfDayForDate:now];
-
-    // 设备源样本谓词：当天 + 排除本 App 源（即保留设备源 + 其他第三方源）
     HKSource *mySource = [HKSource defaultSource];
-    NSPredicate *devicePred = [NSCompoundPredicate andPredicateWithSubpredicates:@[
-        [HKQuery predicateForSamplesWithStartDate:startOfDay endDate:now options:HKQueryOptionNone],
-        [HKQuery predicateForObjectsFromSource:mySource inverted:1]
-    ]];
 
     HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+    // 查询当天所有 step count 样本
+    NSPredicate *todayPred = [HKQuery predicateForSamplesWithStartDate:startOfDay
+                                                              endDate:now
+                                                            options:HKQueryOptionNone];
     HKSampleQuery *query = [[HKSampleQuery alloc] initWithSampleType:stepType
-                                                              predicate:devicePred
+                                                              predicate:todayPred
                                                                   limit:HKObjectQueryNoLimit
                                                         sortDescriptors:nil
                                                          resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
         if (error) { [self finishWithError:error busy:YES]; return; }
-        // 删除当天所有非本 App 源样本（即设备源样本），清空源让本次写入成为唯一值
-        if (results.count == 0) {
+
+        // 收集所有非本 App 源的样本（即设备源样本）
+        NSMutableArray *deviceSamples = [NSMutableArray array];
+        for (HKSample *s in results) {
+            HKSource *src = s.source;
+            NSString *bid = src.bundleIdentifier;
+            // 保留 bundleIdentifier 为 nil 或 com.apple.health.* 的（设备源）
+            if (bid == nil || [bid hasPrefix:@"com.apple.health."]) {
+                [deviceSamples addObject:s];
+            }
+        }
+
+        if (deviceSamples.count == 0) {
             [self saveOneSample:stepType value:steps deviceRev:deviceRev after:^{
                 [self saveOneSample:[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning]
                             value:distanceMeters
@@ -435,8 +423,10 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
             }];
             return;
         }
+
+        // 删除设备源样本
         dispatch_group_t grp = dispatch_group_create();
-        for (HKSample *s in results) {
+        for (HKSample *s in deviceSamples) {
             dispatch_group_enter(grp);
             [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e) {
                 (void)ok; (void)e;
