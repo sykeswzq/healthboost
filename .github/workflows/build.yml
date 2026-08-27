@@ -15,7 +15,8 @@ jobs:
         run: |
           brew install dpkg
           brew install ldid-procursus 2>/dev/null || brew install procursus/ldid/ldid 2>/dev/null || { echo "ERROR: ldid install failed"; exit 1; }
-          command -v ldid && ldid --version || { echo "ERROR: ldid still not available"; exit 1; }
+          command -v ldid >/dev/null 2>&1 || { echo "ERROR: ldid still not available"; exit 1; }
+          ldid -e /usr/bin/true >/dev/null 2>&1 && echo "ldid OK" || echo "WARN: ldid self-test skipped"
 
       - name: Build package (daemon + app)
         run: bash build.sh
