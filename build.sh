@@ -50,7 +50,11 @@ chmod 644 staging/var/jb/Applications/HealthBoost.app/PkgInfo
 
 # 签名（ldid 可用时）
 if command -v ldid >/dev/null 2>&1; then
-  ldid -S staging/var/jb/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null || true
+  if [ -f HealthBoost.entitlements.plist ]; then
+    ldid -SHealthBoost.entitlements.plist staging/var/jb/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null || true
+  else
+    ldid -S staging/var/jb/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null || true
+  fi
   ldid -S staging/var/jb/usr/bin/HealthBoost 2>/dev/null || true
   echo "  已用 ldid 签名"
 else
@@ -109,7 +113,14 @@ else
 fi
 
 # 刷新主屏幕，让 App 图标出现
-sbreload 2>/dev/null || uicache 2>/dev/null || killall -9 backboardd 2>/dev/null || true
+# 先尝试带路径的 uicache，再回退到 sbreload / 全局 uicache / 重启 backboardd
+if [ -x /var/jb/usr/bin/uicache ]; then
+  /var/jb/usr/bin/uicache -p /var/jb/Applications/HealthBoost.app 2>/dev/null || true
+fi
+if [ -x /usr/bin/uicache ]; then
+  /usr/bin/uicache -p /var/jb/Applications/HealthBoost.app 2>/dev/null || true
+fi
+/var/jb/usr/bin/sbreload 2>/dev/null || sbreload 2>/dev/null || /var/jb/usr/bin/uicache -a 2>/dev/null || uicache -a 2>/dev/null || killall -9 backboardd 2>/dev/null || true
 exit 0
 EOF
 
