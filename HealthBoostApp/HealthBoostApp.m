@@ -26,19 +26,21 @@ static BOOL HBWriteConfig(NSDictionary *config) {
 
     NSString *path = HBConfigPath();
     NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [path stringByDeletingLastPathComponent];
 
-    // 如果文件已存在且不可写（例如由 root 创建），尝试修改权限
+    // 确保目录存在且任何人可写（roothide 下 App 以 mobile 运行，避免依赖目录写权限）
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    [fm setAttributes:@{NSFilePosixPermissions: @0777} ofItemAtPath:dir error:nil];
+
+    // 先放开文件权限，确保即使由 root 创建，mobile 也能覆盖写入
     if ([fm fileExistsAtPath:path]) {
         [fm setAttributes:@{NSFilePosixPermissions: @0666} ofItemAtPath:path error:nil];
     }
 
-    BOOL ok = [data writeToFile:path atomically:YES];
+    // 非原子写：直接覆盖，避免原子写需要在目录内创建临时文件（要求目录写权限）
+    BOOL ok = [data writeToFile:path atomically:NO];
     if (ok) {
-        [fm setAttributes:@{NSFileOwnerAccountID: @501,
-                            NSFileGroupOwnerAccountID: @501,
-                            NSFilePosixPermissions: @0666}
-             ofItemAtPath:path
-                    error:nil];
+        [fm setAttributes:@{NSFilePosixPermissions: @0666} ofItemAtPath:path error:nil];
     }
     return ok;
 }

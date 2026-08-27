@@ -77,7 +77,7 @@ Priority: optional
 EOF
 
 cat > staging/DEBIAN/postinst << 'EOF'
-#!/var/jb/usr/bin/bash
+#!/bin/sh
 PLIST=/var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist
 LABEL=com.sykes.healthboost
 
@@ -108,7 +108,7 @@ fi
 
 # 确保 App（mobile 用户）能读写配置；目录和文件都放开权限
 chown -R mobile:mobile /var/jb/Library/HealthBoost 2>/dev/null || true
-chmod 755 /var/jb/Library/HealthBoost 2>/dev/null || true
+chmod 777 /var/jb/Library/HealthBoost 2>/dev/null || true
 chmod 666 /var/jb/Library/HealthBoost/config.plist 2>/dev/null || true
 
 if [ "$ROOTHIDE" = "1" ]; then
