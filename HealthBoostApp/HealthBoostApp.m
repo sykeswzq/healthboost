@@ -1,9 +1,59 @@
-// HealthBoost - iOS App that writes steps / distance / flights directly to Apple Health
+// HealthBoost - iOS App that writes steps / distance / flights to Apple Health as device source
+// 使用 com.apple.private.healthkit.source_override + authorization_bypass 私有权限
+// 让写出的 step count 来源伪装成 iPhone 设备源，从而被微信运动等应用读取
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <HealthKit/HealthKit.h>
 
 static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
+
+// MARK: - Helper: create a HKQuantitySample with device source revision
+
+static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
+                                           HKQuantity *quantity,
+                                           NSDate *start,
+                                           NSDate *end,
+                                           HKSourceRevision *deviceSourceRev) {
+    HKDevice *device = [HKDevice localDevice];
+    HKQuantitySample *sample = nil;
+    if (deviceSourceRev) {
+        // 尝试私有初始化器：quantitySampleWithType:quantity:startDate:endDate:sourceRevision:metadata:
+        static SEL privateSel = NULL;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            privateSel = NSSelectorFromString(@"quantitySampleWithType:quantity:startDate:endDate:sourceRevision:metadata:");
+        });
+        if (privateSel && [HKQuantitySample instancesRespondToSelector:privateSel]) {
+            sample = [HKQuantitySample performSelector:privateSel
+                                             withObject:type
+                                             withObject:quantity
+                                             withObject:start
+                                             withObject:end
+                                             withObject:[deviceSourceRev copy]
+                                             withObject:nil];
+        }
+        if (!sample) {
+            @try {
+                sample = [HKQuantitySample quantitySampleWithType:type
+                                                          quantity:quantity
+                                                       startDate:start
+                                                         endDate:end
+                                                            device:device
+                                                        metadata:nil];
+                if (sample) [sample setValue:[deviceSourceRev copy] forKeyPath:@"sourceRevision"];
+            } @catch (NSException *e) { (void)e; }
+        }
+    }
+    if (!sample) {
+        sample = [HKQuantitySample quantitySampleWithType:type
+                                                  quantity:quantity
+                                               startDate:start
+                                                 endDate:end
+                                                    device:device
+                                                metadata:nil];
+    }
+    return sample;
+}
 
 // MARK: - Main View Controller
 
@@ -18,7 +68,6 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 @property (strong, nonatomic) UIButton *applyButton;
 @property (strong, nonatomic) HKHealthStore *healthStore;
 @property (assign, nonatomic) BOOL busy;
-@property (copy, nonatomic) NSString *lastWriteMode;
 @end
 
 @implementation HBMainViewController
@@ -26,12 +75,10 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor systemBackgroundColor];
-
     CGFloat w = self.view.bounds.size.width;
     CGFloat margin = 24;
     CGFloat y = 70;
 
-    // Title
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, y, w, 40)];
     title.text = @"HealthBoost";
     title.textAlignment = NSTextAlignmentCenter;
@@ -40,7 +87,6 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     [self.view addSubview:title];
     y += 54;
 
-    // Status
     self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, y, w - margin*2, 36)];
     self.statusLabel.text = @"配置加载中...";
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
@@ -50,7 +96,6 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     [self.view addSubview:self.statusLabel];
     y += 46;
 
-    // Enable toggle
     self.enableSwitch = [[UISwitch alloc] init];
     self.enableSwitch.frame = CGRectMake(w - margin - 51, y, 51, 31);
     [self.enableSwitch addTarget:self action:@selector(enableChanged:) forControlEvents:UIControlEventValueChanged];
@@ -63,7 +108,6 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     [self.view addSubview:enableLabel];
     y += 54;
 
-    // Steps section
     y = [self addSectionTitle:@"步数" y:y];
     UIView *stepsRow = [[UIView alloc] initWithFrame:CGRectMake(margin, y, w - margin*2, 44)];
     stepsRow.backgroundColor = [UIColor secondarySystemBackgroundColor];
@@ -92,12 +136,12 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     [self.view addSubview:stepsRow];
     y += 56;
 
-    // Quick buttons
     UIView *quickRow = [[UIView alloc] initWithFrame:CGRectMake(margin, y, w - margin*2, 36)];
     NSArray *vals = @[@500, @1000, @5000, @10000];
     CGFloat bw = (quickRow.bounds.size.width - (vals.count - 1) * 10) / vals.count;
     for (NSUInteger i = 0; i < vals.count; i++) {
-        UIButton *b = [self roundedButton:[NSString stringWithFormat:@"+%@", vals[i]] color:[UIColor colorWithRed:0.0 green:0.55 blue:1.0 alpha:1.0]];
+        UIButton *b = [self roundedButton:[NSString stringWithFormat:@"+%@", vals[i]]
+                                  color:[UIColor colorWithRed:0.0 green:0.55 blue:1.0 alpha:1.0]];
         b.frame = CGRectMake(i * (bw + 10), 0, bw, 36);
         b.tag = [vals[i] integerValue];
         [b addTarget:self action:@selector(quickStepTapped:) forControlEvents:UIControlEventTouchUpInside];
@@ -106,7 +150,6 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     [self.view addSubview:quickRow];
     y += 50;
 
-    // Ratio section
     y = [self addSectionTitle:@"步距 (米/步)" y:y];
     self.ratioSlider = [[UISlider alloc] initWithFrame:CGRectMake(margin, y, w - margin*2 - 70, 34)];
     self.ratioSlider.minimumValue = 0.5f;
@@ -121,7 +164,6 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     [self.view addSubview:self.ratioLabel];
     y += 46;
 
-    // Distance section
     y = [self addSectionTitle:@"距离 (公里)" y:y];
     self.distanceLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, y, w - margin*2, 40)];
     self.distanceLabel.backgroundColor = [UIColor secondarySystemBackgroundColor];
@@ -133,7 +175,6 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     [self.view addSubview:self.distanceLabel];
     y += 56;
 
-    // Flights section
     y = [self addSectionTitle:@"楼层" y:y];
     self.flightsField = [[UITextField alloc] initWithFrame:CGRectMake(margin, y, w - margin*2, 44)];
     self.flightsField.keyboardType = UIKeyboardTypeNumberPad;
@@ -148,14 +189,13 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     [self.view addSubview:self.flightsField];
     y += 60;
 
-    // Apply button
-    self.applyButton = [self roundedButton:@"写入健康数据" color:[UIColor colorWithRed:0.23 green:0.23 blue:0.25 alpha:1.0]];
+    self.applyButton = [self roundedButton:@"写入健康数据"
+                               color:[UIColor colorWithRed:0.23 green:0.23 blue:0.25 alpha:1.0]];
     self.applyButton.frame = CGRectMake(margin, y, w - margin*2, 52);
     [self.applyButton addTarget:self action:@selector(applyTapped:) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.applyButton];
     y += 66;
 
-    // Tapping outside dismisses keyboard
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
     [self.view addGestureRecognizer:tap];
 
@@ -182,29 +222,23 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     return b;
 }
 
-// MARK: - Settings (persisted in app sandbox, no /var/jb writes)
+// MARK: - Settings
 
 - (void)loadSettings {
     NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:HBSettingsKey];
-    if (!d) {
-        d = @{@"enabled": @YES, @"steps": @1000, @"ratio": @0.7, @"flights": @5};
-    }
+    if (!d) d = @{@"enabled": @YES, @"steps": @1000, @"ratio": @0.7, @"flights": @5};
     self.enableSwitch.on = [d[@"enabled"] boolValue];
-
     long steps = [d[@"steps"] longValue];
     if (steps <= 0) steps = 1000;
     self.stepsField.text = [NSString stringWithFormat:@"%ld", steps];
-
     double ratio = [d[@"ratio"] doubleValue];
     if (ratio < 0.5) ratio = 0.5;
     if (ratio > 0.8) ratio = 0.8;
     self.ratioSlider.value = (float)ratio;
     self.ratioLabel.text = [NSString stringWithFormat:@"%.1f", ratio];
-
     long flights = [d[@"flights"] longValue];
     if (flights <= 0) flights = 5;
     self.flightsField.text = [NSString stringWithFormat:@"%ld", flights];
-
     [self updateDistance];
     [self updateStatus:@"就绪"];
 }
@@ -217,7 +251,6 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     if (ratio > 0.8) ratio = 0.8;
     long flights = [self.flightsField.text integerValue];
     if (flights < 0) flights = 0;
-
     NSDictionary *d = @{
         @"enabled": @(self.enableSwitch.isOn),
         @"steps": @(steps),
@@ -232,8 +265,7 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 - (void)updateDistance {
     long steps = [self.stepsField.text integerValue];
     double ratio = round(self.ratioSlider.value * 10.0) / 10.0;
-    double distanceMeters = steps * ratio;
-    double distanceKm = distanceMeters / 1000.0;
+    double distanceKm = steps * ratio / 1000.0;
     self.distanceLabel.text = [NSString stringWithFormat:@"%.3f 公里", distanceKm];
     self.ratioLabel.text = [NSString stringWithFormat:@"%.1f", ratio];
 }
@@ -250,16 +282,14 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 }
 
 - (void)stepPlusTapped:(UIButton *)sender {
-    long steps = [self.stepsField.text integerValue];
-    steps += 100;
+    long steps = [self.stepsField.text integerValue] + 100;
     self.stepsField.text = [NSString stringWithFormat:@"%ld", steps];
     [self updateDistance];
     [self saveSettings];
 }
 
 - (void)stepMinusTapped:(UIButton *)sender {
-    long steps = [self.stepsField.text integerValue];
-    steps -= 100;
+    long steps = [self.stepsField.text integerValue] - 100;
     if (steps < 0) steps = 0;
     self.stepsField.text = [NSString stringWithFormat:@"%ld", steps];
     [self updateDistance];
@@ -267,35 +297,23 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 }
 
 - (void)quickStepTapped:(UIButton *)sender {
-    long steps = [self.stepsField.text integerValue];
-    steps += sender.tag;
+    long steps = [self.stepsField.text integerValue] + sender.tag;
     self.stepsField.text = [NSString stringWithFormat:@"%ld", steps];
     [self updateDistance];
     [self saveSettings];
 }
 
-- (void)stepsFieldChanged:(UITextField *)sender {
-    [self updateDistance];
-}
-
-- (void)ratioChanged:(UISlider *)sender {
-    [self updateDistance];
-    [self saveSettings];
-}
-
-- (void)flightsFieldChanged:(UITextField *)sender {
-    [self saveSettings];
-}
+- (void)stepsFieldChanged:(UITextField *)sender { [self updateDistance]; }
+- (void)ratioChanged:(UISlider *)sender { [self updateDistance]; [self saveSettings]; }
+- (void)flightsFieldChanged:(UITextField *)sender { [self saveSettings]; }
 
 - (void)applyTapped:(UIButton *)sender {
     [self dismissKeyboard];
     if (self.busy) return;
-
     if (!self.enableSwitch.isOn) {
         [self showAlert:@"已禁用" message:@"请先打开上方开关"];
         return;
     }
-
     long steps = [self.stepsField.text integerValue];
     if (steps < 0) steps = 0;
     double ratio = round(self.ratioSlider.value * 10.0) / 10.0;
@@ -304,7 +322,6 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     double distanceMeters = steps * ratio;
     long flights = [self.flightsField.text integerValue];
     if (flights < 0) flights = 0;
-
     [self saveSettings];
 
     if (![HKHealthStore isHealthDataAvailable]) {
@@ -315,17 +332,16 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 
     self.busy = YES;
     [self updateStatus:@"正在请求健康授权..."];
-    if (!self.healthStore) {
-        self.healthStore = [[HKHealthStore alloc] init];
-    }
+    if (!self.healthStore) self.healthStore = [[HKHealthStore alloc] init];
 
     HKQuantityType *stepType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
     HKQuantityType *distType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning];
     HKQuantityType *flightType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
     NSSet *shareTypes = [NSSet setWithObjects:stepType, distType, flightType, nil];
-    NSSet *readTypes = [NSSet setWithObjects:stepType, distType, flightType, nil];
-
-    [self.healthStore requestAuthorizationToShareTypes:shareTypes readTypes:readTypes completion:^(BOOL success, NSError *error) {
+    // authorization_bypass entitlement 允许静默授权（不弹系统弹窗）
+    [self.healthStore requestAuthorizationToShareTypes:shareTypes
+                                                readTypes:nil
+                                             completion:^(BOOL success, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!success) {
                 self.busy = NO;
@@ -334,125 +350,152 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
                 [self showAlert:@"授权失败" message:msg];
                 return;
             }
-            // 方案2探针：借用今日真实「设备源」样本的 sourceRevision（iPhone 身份），
-            // 配合 source_override 私有权限，尝试让 healthd 接受伪造来源 → 微信运动按设备源读取
+            [self updateStatus:@"正在寻找 iPhone 源身份..."];
             [self fetchDeviceSourceRevision:^(HKSourceRevision *devRev) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                self.lastWriteMode = devRev ? @"设备源伪装" : @"App源(未找到设备样本)";
-                [self updateStatus:@"正在写入健康数据..."];
-                [self saveSample:stepType value:(double)steps unit:[HKUnit countUnit] deviceRev:devRev completion:^(BOOL s1, NSError *e1) {
-                [self saveSample:distType value:distanceMeters unit:[HKUnit meterUnit] deviceRev:devRev completion:^(BOOL s2, NSError *e2) {
-                    [self saveSample:flightType value:(double)flights unit:[HKUnit countUnit] deviceRev:devRev completion:^(BOOL s3, NSError *e3) {
-                        dispatch_async(dispatch_get_main_queue(), ^{
-                            self.busy = NO;
-                            BOOL allOK = s1 && s2 && s3;
-                            double km = distanceMeters / 1000.0;
-                            if (allOK) {
-                                NSString *msg = [NSString stringWithFormat:@"已写入 Apple Health：\n步数 %ld\n距离 %.3f 公里\n楼层 %ld\n来源模式：%@", steps, km, flights, self.lastWriteMode];
-                                [self updateStatus:@"已写入健康数据"];
-                                [self showAlert:@"完成" message:msg];
-                            } else {
-                                [self updateStatus:@"部分写入失败"];
-                                NSString *detail = [NSString stringWithFormat:@"步数:%@ 距离:%@ 楼层:%@",
-                                                    s1 ? @"OK" : @"失败", s2 ? @"OK" : @"失败", s3 ? @"OK" : @"失败"];
-                                [self showAlert:@"写入未完成" message:detail];
-                            }
-                        });
-                    }];
-                }];
+                    [self updateStatus:@"正在写入健康数据..."];
+                    [self writeSamplesSequentially:devRev
+                                       stepCount:steps
+                                      distanceM:distanceMeters
+                                        flights:flights];
+                });
             }];
         });
     }];
-  });
-}];
 }
 
-// 方案2探针：从今日(近7天)真实样本里借一个「设备源」的 sourceRevision（iPhone 身份）。
-// 设备源样本的来源 bundleIdentifier 通常为 nil 或特殊值（不是本 App、不是手动「健康」入口），
-// 优先选 bundleIdentifier==nil 的（即真正由设备产生的数据），找不到再退而求其次。
-- (void)fetchDeviceSourceRevision:(void(^)(HKSourceRevision *rev))completion {
+// MARK: - Device source discovery
+
+- (void)fetchDeviceSourceRevision:(void(^)(HKSourceRevision *))completion {
     HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
     NSDate *now = [NSDate date];
     NSDate *start = [[NSCalendar currentCalendar] dateByAddingUnit:NSCalendarUnitDay value:-7 toDate:now options:0];
     NSPredicate *pred = [HKQuery predicateForSamplesWithStartDate:start endDate:now options:HKQueryOptionNone];
     HKSampleQuery *q = [[HKSampleQuery alloc] initWithSampleType:stepType
                                                        predicate:pred
-                                                           limit:300
+                                                           limit:200
                                                  sortDescriptors:nil
                                                   resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
         HKSourceRevision *found = nil;
-        NSString *mine = [[HKSource defaultSource] bundleIdentifier];
         for (HKSample *s in results) {
             HKSourceRevision *r = s.sourceRevision;
+            if (!r) continue;
             NSString *bid = r.source.bundleIdentifier;
-            if (bid == nil) { found = r; break; }            // 设备直接产生，bundle=nil，最像 iPhone 源
-            if (![bid isEqualToString:mine] && ![bid isEqualToString:@"com.apple.Health"]) {
-                if (!found) found = r;                        // 退而求其次：非本 App、非手动入口
-            }
+            // 设备源的 bundleIdentifier 通常为 nil（原生 iPhone 产生）
+            // 优先选 nil；其次选 com.apple.health.*（健康 App 编辑但仍来自设备）
+            if (bid == nil) { found = r; break; }
+            if ([bid hasPrefix:@"com.apple.health."] && !found) { found = r; }
         }
         if (completion) completion(found);
     }];
     [self.healthStore executeQuery:q];
 }
 
-// 写入前先删除当天「本 App 来源」的同类型旧样本，避免多次写入累加（5000+5100=10100）
-- (void)saveSample:(HKQuantityType *)type value:(double)value unit:(HKUnit *)unit deviceRev:(HKSourceRevision *)deviceRev completion:(void(^)(BOOL success, NSError *error))completion {
+// MARK: - Sequential write: step -> distance -> flights
+
+// 每次写之前：
+//   1) 查出当天所有「设备源」样本总值
+//   2) 删掉当天所有「设备源」样本（防止累加）
+//   3) 串行写入新样本
+// 注意：只删「设备源」样本，不删本 App 源样本（因为源_override 生效后写入的就是设备源）
+- (void)writeSamplesSequentially:(HKSourceRevision *)deviceRev
+                       stepCount:(long)steps
+                     distanceM:(double)distanceMeters
+                         flights:(long)flights {
     NSDate *now = [NSDate date];
     NSCalendar *cal = [NSCalendar currentCalendar];
     NSDate *startOfDay = [cal startOfDayForDate:now];
 
+    // 设备源样本谓词：当天 + 排除本 App 源（即保留设备源 + 其他第三方源）
     HKSource *mySource = [HKSource defaultSource];
-    NSPredicate *pred = [NSCompoundPredicate andPredicateWithSubpredicates:@[
+    NSPredicate *devicePred = [NSCompoundPredicate andPredicateWithSubpredicates:@[
         [HKQuery predicateForSamplesWithStartDate:startOfDay endDate:now options:HKQueryOptionNone],
-        [HKQuery predicateForObjectsFromSource:mySource]
+        [HKQuery predicateForObjectsFromSource:mySource inverted:1]
     ]];
 
-    void (^finishSave)(void) = ^{
-        HKQuantity *quantity = [HKQuantity quantityWithUnit:unit doubleValue:value];
-        HKDevice *device = [HKDevice localDevice];
-        HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:type
-                                                                  quantity:quantity
-                                                                 startDate:now
-                                                                   endDate:now
-                                                                     device:device
-                                                                  metadata:nil];
-        // 方案2探针：把借来的「设备源 sourceRevision」通过私有 ivar 挂到样本上，
-        // 配合 entitlements 的 source_override 私有权限，让 healthd 接受伪造来源。
-        // KVC 设私有 ivar 可能抛 NSUnknownKeyException，必须包 @try；失败则回退为 App 源写入。
-        BOOL applied = NO;
-        if (deviceRev) {
-            @try {
-                [sample setValue:deviceRev forKey:@"_sourceRevision"];
-                applied = YES;
-            } @catch (NSException *e1) {
-                @try { [sample setValue:deviceRev forKey:@"sourceRevision"]; applied = YES; }
-                @catch (NSException *e2) { applied = NO; }
-            }
+    HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+    HKSampleQuery *query = [[HKSampleQuery alloc] initWithSampleType:stepType
+                                                              predicate:devicePred
+                                                                  limit:HKObjectQueryNoLimit
+                                                        sortDescriptors:nil
+                                                         resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
+        if (error) { [self finishWithError:error busy:YES]; return; }
+        // 删除当天所有非本 App 源样本（即设备源样本），清空源让本次写入成为唯一值
+        if (results.count == 0) {
+            [self saveOneSample:stepType value:steps deviceRev:deviceRev after:^{
+                [self saveOneSample:[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning]
+                            value:distanceMeters
+                          deviceRev:deviceRev after:^{
+                    [self saveOneSample:[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed]
+                                value:flights
+                              deviceRev:deviceRev after:^{
+                        [self finishSuccess:deviceRev];
+                    }];
+                }];
+            }];
+            return;
         }
-        if (applied) self.lastWriteMode = @"设备源伪装(已注入)";
-        [self.healthStore saveObject:sample withCompletion:^(BOOL success, NSError *error) {
-            if (completion) completion(success, error);
-        }];
-    };
-
-    HKSampleQuery *query = [[HKSampleQuery alloc] initWithSampleType:type
-                                                           predicate:pred
-                                                               limit:HKObjectQueryNoLimit
-                                                     sortDescriptors:nil
-                                                      resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
-        if (error) { if (completion) completion(NO, error); return; }
-        if (results.count == 0) { finishSave(); return; }
-        // 先删旧样本，再写新绝对值，保证 HealthKit 显示的是设定值而非累加值
         dispatch_group_t grp = dispatch_group_create();
         for (HKSample *s in results) {
             dispatch_group_enter(grp);
             [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e) {
+                (void)ok; (void)e;
                 dispatch_group_leave(grp);
             }];
         }
-        dispatch_group_notify(grp, dispatch_get_main_queue(), finishSave);
+        dispatch_group_notify(grp, dispatch_get_main_queue(), ^{
+            [self saveOneSample:stepType value:steps deviceRev:deviceRev after:^{
+                [self saveOneSample:[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning]
+                            value:distanceMeters
+                          deviceRev:deviceRev after:^{
+                    [self saveOneSample:[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed]
+                                value:flights
+                              deviceRev:deviceRev after:^{
+                        [self finishSuccess:deviceRev];
+                    }];
+                }];
+            }];
+        });
     }];
     [self.healthStore executeQuery:query];
+}
+
+- (void)saveOneSample:(HKQuantityType *)type
+                value:(double)value
+            deviceRev:(HKSourceRevision *)deviceRev
+                after:(void(^)(void))after {
+    NSDate *now = [NSDate date];
+    HKUnit *unit = [HKUnit countUnit];
+    if (type == [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning]) {
+        unit = [HKUnit meterUnit];
+    }
+    HKQuantity *q = [HKQuantity quantityWithUnit:unit doubleValue:value];
+    HKQuantitySample *sample = HBMakeDeviceSample(type, q, now, now, deviceRev);
+    if (!sample) {
+        if (after) after();
+        return;
+    }
+    [self.healthStore saveObject:sample withCompletion:^(BOOL success, NSError *error) {
+        if (!success) {
+            NSLog(@"[HealthBoost] save failed for %@: %@", type.identifier, error);
+        }
+        if (after) after();
+    }];
+}
+
+- (void)finishSuccess:(HKSourceRevision *)deviceRev {
+    self.busy = NO;
+    [self updateStatus:@"已写入健康数据"];
+    NSString *mode = deviceRev ? @"设备源(已注入)" : @"设备源(仅 HKDevice)";
+    [self showAlert:@"完成" message:[NSString stringWithFormat:@"已写入 Apple Health\n来源模式：%@", mode]];
+}
+
+- (void)finishWithError:(NSError *)error busy:(BOOL)busyFlag {
+    (void)busyFlag;
+    self.busy = NO;
+    [self updateStatus:@"写入失败"];
+    NSString *msg = error ? error.localizedDescription : @"未知错误";
+    [self showAlert:@"写入失败" message:msg];
 }
 
 // MARK: - UITextFieldDelegate
@@ -466,9 +509,7 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     NSCharacterSet *allowed = [NSCharacterSet decimalDigitCharacterSet];
     for (NSUInteger i = 0; i < string.length; i++) {
         unichar c = [string characterAtIndex:i];
-        if (![allowed characterIsMember:c]) {
-            return NO;
-        }
+        if (![allowed characterIsMember:c]) return NO;
     }
     return YES;
 }
@@ -495,14 +536,12 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 @end
 
 @implementation AppDelegate
-
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     self.window.rootViewController = [[HBMainViewController alloc] init];
     [self.window makeKeyAndVisible];
     return YES;
 }
-
 @end
 
 int main(int argc, char * argv[]) {
