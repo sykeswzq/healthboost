@@ -358,16 +358,47 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     }];
 }
 
+// 写入前先删除当天「本 App 来源」的同类型旧样本，避免多次写入累加（5000+5100=10100）
 - (void)saveSample:(HKQuantityType *)type value:(double)value unit:(HKUnit *)unit completion:(void(^)(BOOL success, NSError *error))completion {
-    HKQuantity *quantity = [HKQuantity quantityWithUnit:unit doubleValue:value];
     NSDate *now = [NSDate date];
-    HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:type
-                                                              quantity:quantity
-                                                             startDate:now
-                                                               endDate:now];
-    [self.healthStore saveObject:sample withCompletion:^(BOOL success, NSError *error) {
-        if (completion) completion(success, error);
+    NSCalendar *cal = [NSCalendar currentCalendar];
+    NSDate *startOfDay = [cal startOfDayForDate:now];
+
+    HKSource *mySource = [HKSource defaultSource];
+    NSPredicate *pred = [NSCompoundPredicate andPredicateWithSubpredicates:@[
+        [HKQuery predicateForSamplesWithStartDate:startOfDay endDate:now options:HKQueryOptionNone],
+        [HKQuery predicateForObjectsFromSource:mySource]
+    ]];
+
+    void (^finishSave)(void) = ^{
+        HKQuantity *quantity = [HKQuantity quantityWithUnit:unit doubleValue:value];
+        HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:type
+                                                                  quantity:quantity
+                                                                 startDate:now
+                                                                   endDate:now];
+        [self.healthStore saveObject:sample withCompletion:^(BOOL success, NSError *error) {
+            if (completion) completion(success, error);
+        }];
+    };
+
+    HKSampleQuery *query = [[HKSampleQuery alloc] initWithSampleType:type
+                                                           predicate:pred
+                                                               limit:HKObjectQueryNoLimit
+                                                     sortDescriptors:nil
+                                                      resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
+        if (error) { if (completion) completion(NO, error); return; }
+        if (results.count == 0) { finishSave(); return; }
+        // 先删旧样本，再写新绝对值，保证 HealthKit 显示的是设定值而非累加值
+        dispatch_group_t grp = dispatch_group_create();
+        for (HKSample *s in results) {
+            dispatch_group_enter(grp);
+            [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e) {
+                dispatch_group_leave(grp);
+            }];
+        }
+        dispatch_group_notify(grp, dispatch_get_main_queue(), finishSave);
     }];
+    [self.healthStore executeQuery:query];
 }
 
 // MARK: - UITextFieldDelegate
