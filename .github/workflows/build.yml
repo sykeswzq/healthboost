@@ -10,6 +10,14 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Clear build cache
+        run: |
+          rm -rf ~/Library/Caches/org.llvm.clang/*/ModuleCache.noindex/
+          rm -rf ~/Library/Developer/Xcode/DerivedData/
+          echo "Cache cleared"
 
       - name: Install build tools
         run: |

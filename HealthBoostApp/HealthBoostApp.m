@@ -7,6 +7,29 @@
 
 static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 
+// MARK: - Logging helper（日志写入 App 沙盒，可通过 Files App 访问）
+
+static void HBLog(NSString *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
+    va_end(args);
+    NSLog(@"%@", msg);
+    // 写入 App 沙盒 Documents 目录
+    NSString *logPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    logPath = [logPath stringByAppendingPathComponent:@"hb_log.txt"];
+    NSDateFormatter *fmtDate = [[NSDateFormatter alloc] init];
+    fmtDate.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [fmtDate stringFromDate:[NSDate date]], msg];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (!fh) fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (fh) {
+        [fh seekToEndOfFile];
+        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
+    }
+}
+
 // MARK: - Helper: create HKQuantitySample with device source via KVC
 
 static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
@@ -175,6 +198,20 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     [self.view addSubview:self.applyButton];
     y += 66;
 
+    // 查看日志 按钮
+    UIButton *logBtn = [self roundedButton:@"查看日志" color:[UIColor systemOrangeColor]];
+    logBtn.frame = CGRectMake(margin, y, w - margin*2, 44);
+    [logBtn addTarget:self action:@selector(viewLogTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:logBtn];
+    y += 56;
+
+    // 重启 SpringBoard 按钮
+    UIButton *respringBtn = [self roundedButton:@"重启 SpringBoard" color:[UIColor systemTealColor]];
+    respringBtn.frame = CGRectMake(margin, y, w - margin*2, 44);
+    [respringBtn addTarget:self action:@selector(respringTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:respringBtn];
+    y += 56;
+
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
     [self.view addGestureRecognizer:tap];
 
@@ -286,6 +323,41 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 - (void)ratioChanged:(UISlider *)sender { [self updateDistance]; [self saveSettings]; }
 - (void)flightsFieldChanged:(UITextField *)sender { [self saveSettings]; }
 
+- (void)respringTapped:(UIButton *)sender {
+    HBLog(@"[HealthBoost] respring requested");
+    // 用 killall 重启 SpringBoard（roothide 下需要 no-sandbox 权限）
+    int pid = fork();
+    if (pid == 0) {
+        // 子进程
+        execlp("killall", "killall", "-HUP", "SpringBoard", nil);
+        _exit(1);
+    } else if (pid > 0) {
+        // 父进程
+        [self updateStatus:@"正在重启 SpringBoard..."];
+        // 延迟通知完成
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self updateStatus:@"已重启"];
+            [self showAlert:@"完成" message:@"SpringBoard 已重启"];
+        });
+    }
+}
+
+- (void)viewLogTapped:(UIButton *)sender {
+    // 读取日志文件并展示
+    NSString *logPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    logPath = [logPath stringByAppendingPathComponent:@"hb_log.txt"];
+    NSString *content = [NSString stringWithContentsOfFile:logPath encoding:NSUTF8StringEncoding error:nil];
+    if (!content) content = @"暂无日志记录";
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"运行日志" message:content preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleDefault handler:nil]];
+    // 复制按钮
+    [alert addAction:[UIAlertAction actionWithTitle:@"复制" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        UIPasteboard *pb = [UIPasteboard generalPasteboard];
+        pb.string = content;
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)applyTapped:(UIButton *)sender {
     [self dismissKeyboard];
     if (self.busy) return;
@@ -349,34 +421,41 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 - (void)fetchDeviceSourceRevision:(void(^)(HKSourceRevision *))completion {
     HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
     NSDate *now = [NSDate date];
-    NSDate *start = [[NSCalendar currentCalendar] dateByAddingUnit:NSCalendarUnitDay value:-7 toDate:now options:0];
+    NSCalendar *cal = [NSCalendar currentCalendar];
+    // 兼容 iOS 16.5：不用已废弃的 dateByAddingUnit:options:
+    NSDateComponents *comps = [[NSDateComponents alloc] init];
+    comps.day = -7;
+    NSDate *start = [cal dateByAddingComponents:comps toDate:now options:0];
     NSPredicate *pred = [HKQuery predicateForSamplesWithStartDate:start endDate:now options:HKQueryOptionNone];
     HKSampleQuery *q = [[HKSampleQuery alloc] initWithSampleType:stepType
                                                        predicate:pred
                                                            limit:200
                                                  sortDescriptors:nil
                                                   resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
+        if (error) {
+            HBLog(@"[HealthBoost] fetchDeviceSource error: %@", error);
+        }
         HKSourceRevision *found = nil;
-        for (HKSample *s in results) {
+        NSArray *samples = results ?: @[];
+        for (HKSample *s in samples) {
             HKSourceRevision *r = s.sourceRevision;
             if (!r) continue;
-            NSString *bid = r.source.bundleIdentifier;
-            // 设备源的 bundleIdentifier 通常为 nil（原生 iPhone 产生）
+            HKSource *src = r.source;
+            NSString *bid = src ? src.bundleIdentifier : nil;
+            HBLog(@"[HealthBoost] sample source: bid=%@ revisionId=%@",
+                  bid ?: @"nil",
+                  r.sourceRevisionID ?: @"nil");
             if (bid == nil) { found = r; break; }
-            // 其次选 com.apple.health.*（健康 App 编辑但仍来自设备）
             if ([bid hasPrefix:@"com.apple.health."] && !found) { found = r; }
         }
+        HBLog(@"[HealthBoost] found deviceSourceRev: %p", (void*)found);
         if (completion) completion(found);
     }];
     [self.healthStore executeQuery:q];
 }
 
-// MARK: - Sequential write: step -> distance -> flights
+// MARK: - Sequential write (fully async, no blocking)
 
-// 每次写之前：
-//   1) 查询当天所有样本，按来源分组
-//   2) 删除所有非本 App 源的样本（即设备源样本），清空源
-//   3) 串行写入新样本
 - (void)writeSamplesSequentially:(HKSourceRevision *)deviceRev
                        stepCount:(long)steps
                      distanceM:(double)distanceMeters
@@ -384,10 +463,12 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     NSDate *now = [NSDate date];
     NSCalendar *cal = [NSCalendar currentCalendar];
     NSDate *startOfDay = [cal startOfDayForDate:now];
-    HKSource *mySource = [HKSource defaultSource];
 
-    HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
-    // 查询当天所有 step count 样本
+    HKQuantityType *stepType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+    HKQuantityType *distType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning];
+    HKQuantityType *flightType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
+
+    // Step 1: 查询当天样本
     NSPredicate *todayPred = [HKQuery predicateForSamplesWithStartDate:startOfDay
                                                               endDate:now
                                                             options:HKQueryOptionNone];
@@ -396,80 +477,84 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
                                                                   limit:HKObjectQueryNoLimit
                                                         sortDescriptors:nil
                                                          resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
-        if (error) { [self finishWithError:error busy:YES]; return; }
+        if (error) {
+            HBLog(@"[HealthBoost] query error: %@", error);
+            dispatch_async(dispatch_get_main_queue(), ^{ [self finishWithError:error busy:YES]; });
+            return;
+        }
 
-        // 收集所有非本 App 源的样本（即设备源样本）
+        NSArray *samples = results ?: @[];
+        HBLog(@"[HealthBoost] today %lu samples", (unsigned long)samples.count);
+
+        // 找出设备源样本
         NSMutableArray *deviceSamples = [NSMutableArray array];
-        for (HKSample *s in results) {
-            HKSource *src = s.source;
-            NSString *bid = src.bundleIdentifier;
-            // 保留 bundleIdentifier 为 nil 或 com.apple.health.* 的（设备源）
+        for (HKSample *s in samples) {
+            NSString *bid = s.source.bundleIdentifier;
             if (bid == nil || [bid hasPrefix:@"com.apple.health."]) {
                 [deviceSamples addObject:s];
             }
         }
+        HBLog(@"[HealthBoost] device samples to delete: %lu", (unsigned long)deviceSamples.count);
 
-        if (deviceSamples.count == 0) {
-            [self saveOneSample:stepType value:steps deviceRev:deviceRev after:^{
-                [self saveOneSample:[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning]
-                            value:distanceMeters
-                          deviceRev:deviceRev after:^{
-                    [self saveOneSample:[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed]
-                                value:flights
-                              deviceRev:deviceRev after:^{
-                        [self finishSuccess:deviceRev];
-                    }];
+        // Step 2: 删除设备源样本（异步）
+        if (deviceSamples.count > 0) {
+            __block NSUInteger remaining = deviceSamples.count;
+            for (HKSample *s in deviceSamples) {
+                [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e) {
+                    HBLog(@"[HealthBoost] delete %@: ok=%d err=%@", s.sampleType.identifier, ok, e ?: @"nil");
+                    if (--remaining == 0) {
+                        HBLog(@"[HealthBoost] all deletes done");
+                        // Step 3: 开始写样本
+                        [self _writeSteps:steps dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
+                    }
                 }];
-            }];
-            return;
+            }
+        } else {
+            // 没有设备源样本，直接开始写
+            [self _writeSteps:steps dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
         }
-
-        // 删除设备源样本
-        dispatch_group_t grp = dispatch_group_create();
-        for (HKSample *s in deviceSamples) {
-            dispatch_group_enter(grp);
-            [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e) {
-                (void)ok; (void)e;
-                dispatch_group_leave(grp);
-            }];
-        }
-        dispatch_group_notify(grp, dispatch_get_main_queue(), ^{
-            [self saveOneSample:stepType value:steps deviceRev:deviceRev after:^{
-                [self saveOneSample:[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning]
-                            value:distanceMeters
-                          deviceRev:deviceRev after:^{
-                    [self saveOneSample:[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed]
-                                value:flights
-                              deviceRev:deviceRev after:^{
-                        [self finishSuccess:deviceRev];
-                    }];
-                }];
-            }];
-        });
     }];
     [self.healthStore executeQuery:query];
 }
 
-- (void)saveOneSample:(HKQuantityType *)type
-                value:(double)value
-            deviceRev:(HKSourceRevision *)deviceRev
-                after:(void(^)(void))after {
-    NSDate *now = [NSDate date];
+- (void)_writeSteps:(long)steps dist:(double)distM flights:(long)flights deviceRev:(HKSourceRevision *)deviceRev index:(NSUInteger)index {
+    HKQuantityType *stepType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+    HKQuantityType *distType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning];
+    HKQuantityType *flightType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
+
+    HKQuantityType *type;
+    double value;
+    if (index == 0)      { type = stepType;    value = (double)steps; }
+    else if (index == 1) { type = distType;    value = distM; }
+    else                 { type = flightType;  value = (double)flights; }
+
+    NSDate *sampleNow = [NSDate date];
     HKUnit *unit = [HKUnit countUnit];
-    if (type == [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning]) {
-        unit = [HKUnit meterUnit];
-    }
+    if (type == distType) unit = [HKUnit meterUnit];
     HKQuantity *q = [HKQuantity quantityWithUnit:unit doubleValue:value];
-    HKQuantitySample *sample = HBMakeDeviceSample(type, q, now, now, deviceRev);
+    HKQuantitySample *sample = HBMakeDeviceSample(type, q, sampleNow, sampleNow, deviceRev);
+
     if (!sample) {
-        if (after) after();
+        HBLog(@"[HealthBoost] sample creation failed");
+        dispatch_async(dispatch_get_main_queue(), ^{ [self finishWithError:nil busy:YES]; });
         return;
     }
+
+    HBLog(@"[HealthBoost] saving %@ value=%.2f", type.identifier, value);
     [self.healthStore saveObject:sample withCompletion:^(BOOL success, NSError *error) {
+        HBLog(@"[HealthBoost] save %@: ok=%d err=%@", type.identifier, success, error ?: @"nil");
         if (!success) {
-            NSLog(@"[HealthBoost] save failed for %@: %@", type.identifier, error);
+            dispatch_async(dispatch_get_main_queue(), ^{ [self finishWithError:error busy:YES]; });
+            return;
         }
-        if (after) after();
+        if (index < 2) {
+            // 继续写下一个
+            [self _writeSteps:steps dist:distM flights:flights deviceRev:deviceRev index:index + 1];
+        } else {
+            // 全部写完
+            HBLog(@"[HealthBoost] all writes complete");
+            dispatch_async(dispatch_get_main_queue(), ^{ [self finishSuccess:deviceRev]; });
+        }
     }];
 }
 
