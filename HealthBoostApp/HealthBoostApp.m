@@ -442,13 +442,12 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
             if (!r) continue;
             HKSource *src = r.source;
             NSString *bid = src ? src.bundleIdentifier : nil;
-            HBLog(@"[HealthBoost] sample source: bid=%@ revisionId=%@",
-                  bid ?: @"nil",
-                  r.sourceRevisionID ?: @"nil");
+            HBLog(@"[HealthBoost] sample source: bid=%@",
+                  bid ?: @"nil");
             if (bid == nil) { found = r; break; }
             if ([bid hasPrefix:@"com.apple.health."] && !found) { found = r; }
         }
-        HBLog(@"[HealthBoost] found deviceSourceRev: %p", (void*)found);
+        HBLog(@"[HealthBoost] found deviceSourceRev: %@", found ?: @"nil");
         if (completion) completion(found);
     }];
     [self.healthStore executeQuery:q];
