@@ -92,17 +92,24 @@ if [ ! -f /var/jb/Library/HealthBoost/config.plist ]; then
 <plist version="1.0">
 <dict>
     <key>enabled</key>
-    <false/>
+    <true/>
     <key>steps</key>
-    <integer>0</integer>
+    <integer>1000</integer>
+    <key>ratio</key>
+    <real>0.7</real>
     <key>distance</key>
-    <real>0.0</real>
+    <real>700.0</real>
     <key>flights</key>
-    <integer>0</integer>
+    <integer>5</integer>
 </dict>
 </plist>
 PLISTEOF
 fi
+
+# 确保 App（mobile 用户）能读写配置；目录和文件都放开权限
+chown -R mobile:mobile /var/jb/Library/HealthBoost 2>/dev/null || true
+chmod 755 /var/jb/Library/HealthBoost 2>/dev/null || true
+chmod 666 /var/jb/Library/HealthBoost/config.plist 2>/dev/null || true
 
 if [ "$ROOTHIDE" = "1" ]; then
   launchctl enable "system/$LABEL" 2>/dev/null || true

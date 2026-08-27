@@ -17,14 +17,30 @@ static NSString *HBConfigPath(void) {
     return @"/var/jb/Library/HealthBoost/config.plist";
 }
 
-static void HBWriteConfig(NSDictionary *config) {
+static BOOL HBWriteConfig(NSDictionary *config) {
     NSData *data = [NSPropertyListSerialization dataWithPropertyList:config
                                                               format:NSPropertyListXMLFormat_v1_0
                                                              options:0
                                                                error:nil];
-    if (data) {
-        [data writeToFile:HBConfigPath() atomically:YES];
+    if (!data) return NO;
+
+    NSString *path = HBConfigPath();
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    // 如果文件已存在且不可写（例如由 root 创建），尝试修改权限
+    if ([fm fileExistsAtPath:path]) {
+        [fm setAttributes:@{NSFilePosixPermissions: @0666} ofItemAtPath:path error:nil];
     }
+
+    BOOL ok = [data writeToFile:path atomically:YES];
+    if (ok) {
+        [fm setAttributes:@{NSFileOwnerAccountID: @501,
+                            NSFileGroupOwnerAccountID: @501,
+                            NSFilePosixPermissions: @0666}
+             ofItemAtPath:path
+                    error:nil];
+    }
+    return ok;
 }
 
 static NSDictionary *HBReadConfig(void) {
@@ -168,7 +184,7 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
     y += 46;
 
     // Distance section
-    y = [self addSectionTitle:@"距离 (米)" y:y];
+    y = [self addSectionTitle:@"距离 (公里)" y:y];
     self.distanceLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, y, w - margin*2, 40)];
     self.distanceLabel.backgroundColor = [UIColor secondarySystemBackgroundColor];
     self.distanceLabel.layer.cornerRadius = 10;
@@ -261,12 +277,12 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
     [self updateStatus:@"已加载配置"];
 }
 
-- (void)saveCurrentValues {
+- (BOOL)saveCurrentValues {
     long steps = [self.stepsField.text integerValue];
     if (steps < 0) steps = 0;
 
     double ratio = round(self.ratioSlider.value * 10.0) / 10.0;
-    double distance = steps * ratio;
+    double distanceMeters = steps * ratio;
 
     long flights = [self.flightsField.text integerValue];
     if (flights < 0) flights = 0;
@@ -275,17 +291,18 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
         @"enabled": @(self.enableSwitch.isOn),
         @"steps": @(steps),
         @"ratio": @(ratio),
-        @"distance": @(distance),
+        @"distance": @(distanceMeters),
         @"flights": @(flights)
     };
-    HBWriteConfig(config);
+    return HBWriteConfig(config);
 }
 
 - (void)updateDistance {
     long steps = [self.stepsField.text integerValue];
     double ratio = round(self.ratioSlider.value * 10.0) / 10.0;
-    double distance = steps * ratio;
-    self.distanceLabel.text = [NSString stringWithFormat:@"%.1f 米", distance];
+    double distanceMeters = steps * ratio;
+    double distanceKm = distanceMeters / 1000.0;
+    self.distanceLabel.text = [NSString stringWithFormat:@"%.3f 公里", distanceKm];
     self.ratioLabel.text = [NSString stringWithFormat:@"%.1f", ratio];
 }
 
@@ -296,7 +313,10 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
 // MARK: - Actions
 
 - (void)enableChanged:(UISwitch *)sender {
-    [self saveCurrentValues];
+    if (![self saveCurrentValues]) {
+        [self showAlert:@"保存失败" message:@"无法写入配置文件，请检查文件权限"];
+        return;
+    }
     [self updateStatus:sender.isOn ? @"已启用" : @"已禁用"];
 }
 
@@ -334,9 +354,17 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
     [self saveCurrentValues];
 }
 
+- (void)flightsFieldChanged:(UITextField *)sender {
+    [self saveCurrentValues];
+}
+
 - (void)applyTapped:(UIButton *)sender {
     [self dismissKeyboard];
-    [self saveCurrentValues];
+
+    if (![self saveCurrentValues]) {
+        [self showAlert:@"保存失败" message:@"无法写入 /var/jb/Library/HealthBoost/config.plist，请检查文件权限或卸载重装"];
+        return;
+    }
 
     if (!self.enableSwitch.isOn) {
         [self showAlert:@"已禁用" message:@"请先打开上方开关"];
@@ -351,10 +379,11 @@ static BOOL HBBoolValue(id obj, BOOL fallback) {
     // Read back to confirm
     NSDictionary *config = HBReadConfig();
     long steps = HBIntValue(config[@"steps"], 0);
-    double distance = HBDoubleValue(config[@"distance"], 0);
+    double distanceMeters = HBDoubleValue(config[@"distance"], 0);
+    double distanceKm = distanceMeters / 1000.0;
     long flights = HBIntValue(config[@"flights"], 0);
 
-    NSString *msg = [NSString stringWithFormat:@"已写入：步数 %ld，距离 %.1f 米，楼层 %ld", steps, distance, flights];
+    NSString *msg = [NSString stringWithFormat:@"已写入：步数 %ld，距离 %.3f 公里，楼层 %ld", steps, distanceKm, flights];
     [self updateStatus:msg];
     [self showAlert:@"完成" message:msg];
 }
