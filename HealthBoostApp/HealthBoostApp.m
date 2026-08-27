@@ -18,6 +18,7 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 @property (strong, nonatomic) UIButton *applyButton;
 @property (strong, nonatomic) HKHealthStore *healthStore;
 @property (assign, nonatomic) BOOL busy;
+@property (copy, nonatomic) NSString *lastWriteMode;
 @end
 
 @implementation HBMainViewController
@@ -322,8 +323,9 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
     HKQuantityType *distType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning];
     HKQuantityType *flightType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
     NSSet *shareTypes = [NSSet setWithObjects:stepType, distType, flightType, nil];
+    NSSet *readTypes = [NSSet setWithObjects:stepType, distType, flightType, nil];
 
-    [self.healthStore requestAuthorizationToShareTypes:shareTypes readTypes:nil completion:^(BOOL success, NSError *error) {
+    [self.healthStore requestAuthorizationToShareTypes:shareTypes readTypes:readTypes completion:^(BOOL success, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!success) {
                 self.busy = NO;
@@ -332,16 +334,21 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
                 [self showAlert:@"授权失败" message:msg];
                 return;
             }
-            [self updateStatus:@"正在写入健康数据..."];
-            [self saveSample:stepType value:(double)steps unit:[HKUnit countUnit] completion:^(BOOL s1, NSError *e1) {
-                [self saveSample:distType value:distanceMeters unit:[HKUnit meterUnit] completion:^(BOOL s2, NSError *e2) {
-                    [self saveSample:flightType value:(double)flights unit:[HKUnit countUnit] completion:^(BOOL s3, NSError *e3) {
+            // 方案2探针：借用今日真实「设备源」样本的 sourceRevision（iPhone 身份），
+            // 配合 source_override 私有权限，尝试让 healthd 接受伪造来源 → 微信运动按设备源读取
+            [self fetchDeviceSourceRevision:^(HKSourceRevision *devRev) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                self.lastWriteMode = devRev ? @"设备源伪装" : @"App源(未找到设备样本)";
+                [self updateStatus:@"正在写入健康数据..."];
+                [self saveSample:stepType value:(double)steps unit:[HKUnit countUnit] deviceRev:devRev completion:^(BOOL s1, NSError *e1) {
+                [self saveSample:distType value:distanceMeters unit:[HKUnit meterUnit] deviceRev:devRev completion:^(BOOL s2, NSError *e2) {
+                    [self saveSample:flightType value:(double)flights unit:[HKUnit countUnit] deviceRev:devRev completion:^(BOOL s3, NSError *e3) {
                         dispatch_async(dispatch_get_main_queue(), ^{
                             self.busy = NO;
                             BOOL allOK = s1 && s2 && s3;
                             double km = distanceMeters / 1000.0;
                             if (allOK) {
-                                NSString *msg = [NSString stringWithFormat:@"已写入 Apple Health：\n步数 %ld\n距离 %.3f 公里\n楼层 %ld", steps, km, flights];
+                                NSString *msg = [NSString stringWithFormat:@"已写入 Apple Health：\n步数 %ld\n距离 %.3f 公里\n楼层 %ld\n来源模式：%@", steps, km, flights, self.lastWriteMode];
                                 [self updateStatus:@"已写入健康数据"];
                                 [self showAlert:@"完成" message:msg];
                             } else {
@@ -356,10 +363,40 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
             }];
         });
     }];
+  });
+}];
+}
+
+// 方案2探针：从今日(近7天)真实样本里借一个「设备源」的 sourceRevision（iPhone 身份）。
+// 设备源样本的来源 bundleIdentifier 通常为 nil 或特殊值（不是本 App、不是手动「健康」入口），
+// 优先选 bundleIdentifier==nil 的（即真正由设备产生的数据），找不到再退而求其次。
+- (void)fetchDeviceSourceRevision:(void(^)(HKSourceRevision *rev))completion {
+    HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+    NSDate *now = [NSDate date];
+    NSDate *start = [[NSCalendar currentCalendar] dateByAddingUnit:NSCalendarUnitDay value:-7 toDate:now options:0];
+    NSPredicate *pred = [HKQuery predicateForSamplesWithStartDate:start endDate:now options:HKQueryOptionNone];
+    HKSampleQuery *q = [[HKSampleQuery alloc] initWithSampleType:stepType
+                                                       predicate:pred
+                                                           limit:300
+                                                 sortDescriptors:nil
+                                                  resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
+        HKSourceRevision *found = nil;
+        NSString *mine = [[HKSource defaultSource] bundleIdentifier];
+        for (HKSample *s in results) {
+            HKSourceRevision *r = s.sourceRevision;
+            NSString *bid = r.source.bundleIdentifier;
+            if (bid == nil) { found = r; break; }            // 设备直接产生，bundle=nil，最像 iPhone 源
+            if (![bid isEqualToString:mine] && ![bid isEqualToString:@"com.apple.Health"]) {
+                if (!found) found = r;                        // 退而求其次：非本 App、非手动入口
+            }
+        }
+        if (completion) completion(found);
+    }];
+    [self.healthStore executeQuery:q];
 }
 
 // 写入前先删除当天「本 App 来源」的同类型旧样本，避免多次写入累加（5000+5100=10100）
-- (void)saveSample:(HKQuantityType *)type value:(double)value unit:(HKUnit *)unit completion:(void(^)(BOOL success, NSError *error))completion {
+- (void)saveSample:(HKQuantityType *)type value:(double)value unit:(HKUnit *)unit deviceRev:(HKSourceRevision *)deviceRev completion:(void(^)(BOOL success, NSError *error))completion {
     NSDate *now = [NSDate date];
     NSCalendar *cal = [NSCalendar currentCalendar];
     NSDate *startOfDay = [cal startOfDayForDate:now];
@@ -372,8 +409,6 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 
     void (^finishSave)(void) = ^{
         HKQuantity *quantity = [HKQuantity quantityWithUnit:unit doubleValue:value];
-        // 探针：附上设备(iPhone)信息，配合 entitlements 里的 source_override 私有权限，
-        // 尝试让 healthd 把样本来源识别为「设备」而非 App，从而使微信运动（只认设备源）读取到。
         HKDevice *device = [HKDevice localDevice];
         HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:type
                                                                   quantity:quantity
@@ -381,6 +416,20 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
                                                                    endDate:now
                                                                      device:device
                                                                   metadata:nil];
+        // 方案2探针：把借来的「设备源 sourceRevision」通过私有 ivar 挂到样本上，
+        // 配合 entitlements 的 source_override 私有权限，让 healthd 接受伪造来源。
+        // KVC 设私有 ivar 可能抛 NSUnknownKeyException，必须包 @try；失败则回退为 App 源写入。
+        BOOL applied = NO;
+        if (deviceRev) {
+            @try {
+                [sample setValue:deviceRev forKey:@"_sourceRevision"];
+                applied = YES;
+            } @catch (NSException *e1) {
+                @try { [sample setValue:deviceRev forKey:@"sourceRevision"]; applied = YES; }
+                @catch (NSException *e2) { applied = NO; }
+            }
+        }
+        if (applied) self.lastWriteMode = @"设备源伪装(已注入)";
         [self.healthStore saveObject:sample withCompletion:^(BOOL success, NSError *error) {
             if (completion) completion(success, error);
         }];
