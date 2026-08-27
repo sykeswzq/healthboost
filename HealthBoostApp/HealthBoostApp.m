@@ -372,10 +372,15 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 
     void (^finishSave)(void) = ^{
         HKQuantity *quantity = [HKQuantity quantityWithUnit:unit doubleValue:value];
+        // 探针：附上设备(iPhone)信息，配合 entitlements 里的 source_override 私有权限，
+        // 尝试让 healthd 把样本来源识别为「设备」而非 App，从而使微信运动（只认设备源）读取到。
+        HKDevice *device = [HKDevice localDevice];
         HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:type
                                                                   quantity:quantity
                                                                  startDate:now
-                                                                   endDate:now];
+                                                                   endDate:now
+                                                                     device:device
+                                                                  metadata:nil];
         [self.healthStore saveObject:sample withCompletion:^(BOOL success, NSError *error) {
             if (completion) completion(success, error);
         }];
