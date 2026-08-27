@@ -1,6 +1,17 @@
 // HealthBoost - Simple iOS App for launching daemon
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
+#include <spawn.h>
+#include <sys/wait.h>
+
+static void hb_run(const char *cmd) {
+    pid_t pid;
+    const char *argv[] = {"/bin/sh", "-c", cmd, NULL};
+    if (posix_spawn(&pid, "/bin/sh", NULL, NULL, (char * const *)argv, NULL) == 0) {
+        int status;
+        waitpid(pid, &status, 0);
+    }
+}
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @property (strong, nonatomic) UIWindow *window;
@@ -76,7 +87,7 @@
     }
     
     // Trigger daemon
-    system("launchctl kickstart -k system/com.sykes.healthboost 2>/dev/null");
+    hb_run("launchctl kickstart -k system/com.sykes.healthboost 2>/dev/null");
     
     // Read values
     double steps = [[config[@"steps"] stringValue] doubleValue];
