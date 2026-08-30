@@ -567,25 +567,76 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
         }
         HBLog(@"[HealthBoost] device samples to delete: %lu", (unsigned long)deviceSamples.count);
 
-        // Step 2: 删除设备源样本（异步）
+        // Step 2: 删除设备源样本（用 dispatch_group，内部原子计数，避免竞态）
+        // 注意：旧代码用 __block NSUInteger remaining + --remaining 手工计数，
+        // HealthKit 回调可能并发执行，非原子的自减会丢更新，导致 remaining 永远碰不到 0，
+        // 结果是「样本删了但新样本没写」→ 健康里变空。必须用 dispatch_group。
+        __weak typeof(self) weakSelf = self;
         if (deviceSamples.count > 0) {
-            __block NSUInteger remaining = deviceSamples.count;
+            dispatch_group_t group = dispatch_group_create();
             for (HKSample *s in deviceSamples) {
+                dispatch_group_enter(group);
                 [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e) {
                     HBLog(@"[HealthBoost] delete %@: ok=%d err=%@", s.sampleType.identifier, ok, e ?: @"nil");
-                    if (--remaining == 0) {
-                        HBLog(@"[HealthBoost] all deletes done");
-                        // Step 3: 开始写样本
-                        [self _writeSteps:steps dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
-                    }
+                    dispatch_group_leave(group);
                 }];
             }
+            // 用 notify 异步等待，绝不能用 dispatch_group_wait 阻塞——
+            // 本回调可能就跑在 HealthKit 的串行队列上，阻塞会让删除回调永远无法送达。
+            dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+                HBLog(@"[HealthBoost] all deletes done (%lu 条)", (unsigned long)deviceSamples.count);
+                HBLog(@"[HealthBoost] start writing: steps=%ld dist=%.1f flights=%ld", steps, distanceMeters, flights);
+                [weakSelf _writeSteps:steps dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
+            });
         } else {
-            // 没有设备源样本，直接开始写
-            [self _writeSteps:steps dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
+            HBLog(@"[HealthBoost] no device samples to delete");
+            dispatch_async(dispatch_get_main_queue(), ^{
+                HBLog(@"[HealthBoost] start writing: steps=%ld dist=%.1f flights=%ld", steps, distanceMeters, flights);
+                [weakSelf _writeSteps:steps dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
+            });
         }
     }];
     [self.healthStore executeQuery:query];
+}
+
+// 写入后回读验证：查当天步数总和，确认健康库里到底有没有数据
+- (void)verifyStepsWritten {
+    HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+    NSDate *now = [NSDate date];
+    NSDate *startOfDay = [[NSCalendar currentCalendar] startOfDayForDate:now];
+    NSPredicate *pred = [HKQuery predicateForSamplesWithStartDate:startOfDay endDate:now options:HKQueryOptionNone];
+
+    HKStatisticsQuery *q = [[HKStatisticsQuery alloc] initWithQuantityType:stepType
+                                                  quantitySamplePredicate:pred
+                                                                  options:HKStatisticsOptionCumulativeSum
+                                                        completionHandler:^(HKStatisticsQuery *query, HKStatistics *result, NSError *error) {
+        if (error) {
+            HBLog(@"[HealthBoost] VERIFY error: %@", error);
+            return;
+        }
+        HKQuantity *sum = [result sumQuantity];
+        double v = sum ? [sum doubleValueForUnit:[HKUnit countUnit]] : 0;
+        HBLog(@"[HealthBoost] VERIFY 当天步数总和 = %.0f", v);
+
+        // 逐条列出来源，确认样本到底记在谁名下
+        HKSampleQuery *sq = [[HKSampleQuery alloc] initWithSampleType:stepType
+                                                            predicate:pred
+                                                                limit:50
+                                                      sortDescriptors:nil
+                                                       resultsHandler:^(HKSampleQuery *q2, NSArray *results2, NSError *e2) {
+            HBLog(@"[HealthBoost] VERIFY 当天样本条数 = %lu", (unsigned long)(results2 ?: @[]).count);
+            for (HKSample *s in (results2 ?: @[])) {
+                NSString *bid = s.sourceRevision.source.bundleIdentifier;
+                if ([s isKindOfClass:[HKQuantitySample class]]) {
+                    HKQuantitySample *qs = (HKQuantitySample *)s;
+                    double sv = [qs.quantity doubleValueForUnit:[HKUnit countUnit]];
+                    HBLog(@"[HealthBoost] VERIFY 样本: %.0f 步, 来源=%@", sv, bid ?: @"(nil=设备源)");
+                }
+            }
+        }];
+        [self.healthStore executeQuery:sq];
+    }];
+    [self.healthStore executeQuery:q];
 }
 
 - (void)_writeSteps:(long)steps dist:(double)distM flights:(long)flights deviceRev:(HKSourceRevision *)deviceRev index:(NSUInteger)index {
@@ -624,7 +675,11 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
         } else {
             // 全部写完
             HBLog(@"[HealthBoost] all writes complete");
-            dispatch_async(dispatch_get_main_queue(), ^{ [self finishSuccess:deviceRev]; });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self finishSuccess:deviceRev];
+                // 回读验证：确认健康库里真的有数据、来源是谁（结果只进日志）
+                [self verifyStepsWritten];
+            });
         }
     }];
 }
@@ -633,7 +688,12 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     self.busy = NO;
     [self updateStatus:@"已写入健康数据"];
     NSString *mode = deviceRev ? @"设备源(已注入)" : @"设备源(仅 HKDevice)";
-    [self showAlert:@"完成" message:[NSString stringWithFormat:@"已写入 Apple Health\n来源模式：%@", mode]];
+    NSString *msg = [NSString stringWithFormat:
+        @"已写入 Apple Health\n来源模式：%@\n\n"
+        @"请打开「健康」App 查看；\n"
+        @"若仍为空，点「查看日志」把内容发来，\n"
+        @"日志里有 VERIFY 开头的回读校验结果。", mode];
+    [self showAlert:@"完成" message:msg];
 }
 
 - (void)finishWithError:(NSError *)error busy:(BOOL)busyFlag {
