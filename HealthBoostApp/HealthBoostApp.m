@@ -7,7 +7,43 @@
 
 static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 
-// MARK: - Logging helper（日志写入 App 沙盒，可通过 Files App 访问）
+// MARK: - Logging helper
+// 日志同时写到两个位置：
+//   1) /var/mobile/Media/HealthBoost/hb_log.txt  —— Files App「我的 iPhone」里能直接看到
+//   2) App 沙盒 Documents/hb_log.txt              —— 保底，App 内「查看日志」能读
+// App 带 com.apple.private.security.no-sandbox，可写沙盒外路径。
+
+// 追加一行到指定路径（文件不存在会自动创建）
+static void HBAppendLine(NSString *path, NSString *line) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [path stringByDeletingLastPathComponent];
+    if (![fm fileExistsAtPath:dir]) {
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    if (![fm fileExistsAtPath:path]) {
+        [fm createFileAtPath:path contents:nil attributes:nil];
+    }
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!fh) return;
+    @try {
+        [fh seekToEndOfFile];
+        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+    } @catch (NSException *e) {
+        // 忽略写入异常，避免日志逻辑本身导致崩溃
+    }
+    [fh closeFile];
+}
+
+// 外部共享日志路径（Files App 可见）
+static NSString *HBSharedLogPath(void) {
+    return @"/var/mobile/Media/HealthBoost/hb_log.txt";
+}
+
+// 沙盒内日志路径（保底）
+static NSString *HBSandboxLogPath(void) {
+    NSString *doc = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    return [doc stringByAppendingPathComponent:@"hb_log.txt"];
+}
 
 static void HBLog(NSString *fmt, ...) {
     va_list args;
@@ -15,19 +51,13 @@ static void HBLog(NSString *fmt, ...) {
     NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
     va_end(args);
     NSLog(@"%@", msg);
-    // 写入 App 沙盒 Documents 目录
-    NSString *logPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-    logPath = [logPath stringByAppendingPathComponent:@"hb_log.txt"];
+
     NSDateFormatter *fmtDate = [[NSDateFormatter alloc] init];
     fmtDate.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [fmtDate stringFromDate:[NSDate date]], msg];
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (!fh) fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (fh) {
-        [fh seekToEndOfFile];
-        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh closeFile];
-    }
+
+    HBAppendLine(HBSharedLogPath(), line);
+    HBAppendLine(HBSandboxLogPath(), line);
 }
 
 // MARK: - Helper: create HKQuantitySample with device source via KVC
@@ -216,6 +246,15 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     [self.view addGestureRecognizer:tap];
 
     [self loadSettings];
+
+    // 启动探测：记录关键路径与可写性，方便排查日志去哪了
+    HBLog(@"[HealthBoost] App 启动");
+    HBLog(@"[HealthBoost] NSHomeDirectory = %@", NSHomeDirectory());
+    NSFileManager *fm = [NSFileManager defaultManager];
+    HBLog(@"[HealthBoost] 共享路径可写 = %d", [fm isWritableFileAtPath:@"/var/mobile/Media"]);
+    HBLog(@"[HealthBoost] 共享日志文件 = %@ (存在=%d)",
+          HBSharedLogPath(),
+          [fm fileExistsAtPath:HBSharedLogPath()]);
 }
 
 - (CGFloat)addSectionTitle:(NSString *)text y:(CGFloat)y {
@@ -343,18 +382,51 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 }
 
 - (void)viewLogTapped:(UIButton *)sender {
-    // 读取日志文件并展示
-    NSString *logPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-    logPath = [logPath stringByAppendingPathComponent:@"hb_log.txt"];
-    NSString *content = [NSString stringWithContentsOfFile:logPath encoding:NSUTF8StringEncoding error:nil];
-    if (!content) content = @"暂无日志记录";
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"运行日志" message:content preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleDefault handler:nil]];
-    // 复制按钮
-    [alert addAction:[UIAlertAction actionWithTitle:@"复制" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        UIPasteboard *pb = [UIPasteboard generalPasteboard];
-        pb.string = content;
+    NSString *sharedPath = HBSharedLogPath();
+    NSString *sandboxPath = HBSandboxLogPath();
+
+    NSString *shared = [NSString stringWithContentsOfFile:sharedPath encoding:NSUTF8StringEncoding error:nil];
+    NSString *sandbox = [NSString stringWithContentsOfFile:sandboxPath encoding:NSUTF8StringEncoding error:nil];
+
+    // 取内容更长的那个（更完整）展示
+    NSString *content = nil;
+    NSString *usedPath = nil;
+    if (shared.length >= sandbox.length) {
+        content = shared;
+        usedPath = sharedPath;
+    } else {
+        content = sandbox;
+        usedPath = sandboxPath;
+    }
+    if (!content || content.length == 0) content = @"（暂无日志记录）";
+
+    // 只保留最后 6000 字符，避免弹窗内容过长被系统截断
+    NSString *shown = content;
+    if (shown.length > 6000) {
+        shown = [@"...（已截断，仅显示最后部分）\n" stringByAppendingString:[shown substringFromIndex:shown.length - 6000]];
+    }
+
+    NSString *full = [NSString stringWithFormat:@"共享路径：/var/mobile/Media/HealthBoost/\n沙盒路径：%@\n\n%@", sandboxPath, shown];
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"运行日志"
+                                                                   message:full
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"复制日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [UIPasteboard generalPasteboard].string = content;
+        [self updateStatus:@"日志已复制到剪贴板"];
     }]];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"清空日志" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
+        NSFileManager *fm = [NSFileManager defaultManager];
+        [fm removeItemAtPath:sharedPath error:nil];
+        [fm removeItemAtPath:sandboxPath error:nil];
+        HBLog(@"[HealthBoost] log cleared");
+        [self updateStatus:@"日志已清空"];
+    }]];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleCancel handler:nil]];
+
     [self presentViewController:alert animated:YES completion:nil];
 }
 
