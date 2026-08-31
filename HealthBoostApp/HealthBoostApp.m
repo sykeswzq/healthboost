@@ -5,6 +5,7 @@
 #import <Foundation/Foundation.h>
 #import <HealthKit/HealthKit.h>
 #import <objc/runtime.h>
+#import <Security/Security.h>
 
 static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 
@@ -76,10 +77,42 @@ static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NS
             if ([sn rangeOfString:kw options:NSCaseInsensitiveSearch].length > 0) { hit = YES; break; }
         }
         if (hit) {
-            [out appendFormat:@"%@ : %@\n", clsName, sn];
+            // 附带参数个数与方法签名，便于安全构造 NSInvocation
+            unsigned int nargs = method_getNumberOfArguments(methods[i]);
+            const char *types = method_getTypeEncoding(methods[i]);
+            [out appendFormat:@"%@ : %@   [args=%u types=%s]\n",
+             clsName, sn, nargs, types ? types : ""];
         }
     }
     free(methods);
+}
+
+// 读取自身 entitlements 的实际生效值
+// 目的：确认 ldid 签的 com.apple.private.healthkit.source_override 到底有没有被系统认可。
+static void HBDumpEntitlements(void) {
+    SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
+    if (!task) {
+        HBLog(@"[HealthBoost] ENT: SecTaskCreateFromSelf 失败");
+        return;
+    }
+    NSArray *keys = @[
+        @"com.apple.private.healthkit.source_override",
+        @"com.apple.private.healthkit.authorization_bypass",
+        @"com.apple.private.healthkit.write_authorization_override",
+        @"com.apple.private.security.storage.Health",
+        @"com.apple.developer.healthkit",
+        @"application-identifier",
+    ];
+    for (NSString *k in keys) {
+        CFTypeRef v = SecTaskCopyValueForEntitlement(task, (__bridge CFStringRef)k, NULL);
+        if (v) {
+            HBLog(@"[HealthBoost] ENT %@ = %@", k, (__bridge id)v);
+            CFRelease(v);
+        } else {
+            HBLog(@"[HealthBoost] ENT %@ = (nil 未生效)", k);
+        }
+    }
+    CFRelease(task);
 }
 
 // 导出 API 清单到共享目录（不受日志行数限制）
@@ -336,6 +369,9 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     // 导出 HealthKit 私有 API 清单，用于定位改写样本来源的入口
     HBDumpHealthKitAPIs();
     HBLog(@"[HealthBoost] API 清单已导出: %@", HBAPIDumpPath());
+
+    // 确认 ldid 签的私有 entitlement 是否真的被系统认可
+    HBDumpEntitlements();
 }
 
 - (CGFloat)addSectionTitle:(NSString *)text y:(CGFloat)y {
@@ -689,6 +725,43 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     [self.healthStore executeQuery:query];
 }
 
+// 优先用私有 _saveObjects:atomically:skipInsertionFilter:completion: 写入。
+// skipInsertionFilter=YES 有可能跳过 healthd 的来源过滤，让注入的 device source 得以保留。
+// 调用前先核对参数个数（self + _cmd + 4 = 6），不符就退回公开 API，避免签名不符导致崩溃。
+- (void)saveSamplePrivately:(HKQuantitySample *)sample completion:(void (^)(BOOL success, NSError *error))completion {
+    SEL privSel = NSSelectorFromString(@"_saveObjects:atomically:skipInsertionFilter:completion:");
+    Method m = privSel ? class_getInstanceMethod([HKHealthStore class], privSel) : NULL;
+    unsigned int nargs = m ? method_getNumberOfArguments(m) : 0;
+    HBLog(@"[HealthBoost] _saveObjects 参数个数=%u (期望 6)", nargs);
+
+    if (!m || nargs != 6) {
+        HBLog(@"[HealthBoost] 私有 save 不可用，退回公开 saveObject");
+        [self.healthStore saveObject:sample withCompletion:completion];
+        return;
+    }
+
+    @try {
+        NSMethodSignature *sig = [self.healthStore methodSignatureForSelector:privSel];
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        [inv setSelector:privSel];
+
+        NSArray *objs = @[sample];
+        BOOL atomically = YES;
+        BOOL skipFilter = YES;
+        void (^cb)(BOOL, NSError *) = [completion copy];
+
+        [inv setArgument:&objs      atIndex:2];
+        [inv setArgument:&atomically atIndex:3];
+        [inv setArgument:&skipFilter atIndex:4];
+        [inv setArgument:&cb        atIndex:5];
+        [inv invokeWithTarget:self.healthStore];
+        HBLog(@"[HealthBoost] 已用私有 _saveObjects(skipInsertionFilter:YES) 提交");
+    } @catch (NSException *e) {
+        HBLog(@"[HealthBoost] 私有 save 异常: %@ -> 退回公开 API", e);
+        [self.healthStore saveObject:sample withCompletion:completion];
+    }
+}
+
 // 写入后回读验证：查当天步数总和，确认健康库里到底有没有数据
 - (void)verifyStepsWritten {
     HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
@@ -753,7 +826,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     }
 
     HBLog(@"[HealthBoost] saving %@ value=%.2f", type.identifier, value);
-    [self.healthStore saveObject:sample withCompletion:^(BOOL success, NSError *error) {
+    [self saveSamplePrivately:sample completion:^(BOOL success, NSError *error) {
         HBLog(@"[HealthBoost] save %@: ok=%d err=%@", type.identifier, success, error ?: @"nil");
         if (!success) {
             dispatch_async(dispatch_get_main_queue(), ^{ [self finishWithError:error busy:YES]; });

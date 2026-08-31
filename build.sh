@@ -26,6 +26,7 @@ xcrun --sdk iphoneos clang \
   -framework UIKit \
   -framework Foundation \
   -framework HealthKit \
+  -framework Security \
   -fobjc-arc \
   -arch arm64 -arch arm64e \
   -mios-version-min=13.0 \
