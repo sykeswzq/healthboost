@@ -5,7 +5,10 @@
 #import <Foundation/Foundation.h>
 #import <HealthKit/HealthKit.h>
 #import <objc/runtime.h>
-#import <Security/Security.h>
+#import <dlfcn.h>
+
+// 前向声明：HBDumpEntitlements 定义在 HBLog 之前，需先声明否则会触发隐式声明错误
+static void HBLog(NSString *fmt, ...);
 
 static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 
@@ -89,12 +92,32 @@ static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NS
 
 // 读取自身 entitlements 的实际生效值
 // 目的：确认 ldid 签的 com.apple.private.healthkit.source_override 到底有没有被系统认可。
+// 注意：SecTask 系列在 iOS SDK 中没有公开头文件（属 macOS 私有 API），
+// 这里用 dlsym 运行时查找，找不到就跳过，避免编译/链接失败或运行时崩溃。
 static void HBDumpEntitlements(void) {
-    SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
-    if (!task) {
-        HBLog(@"[HealthBoost] ENT: SecTaskCreateFromSelf 失败");
+    void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW);
+    if (!sec) {
+        HBLog(@"[HealthBoost] ENT: Security.framework 加载失败");
         return;
     }
+
+    typedef struct __SecTask *HBSecTaskRef;
+    HBSecTaskRef (*hbSecTaskCreateFromSelf)(CFAllocatorRef) =
+        (HBSecTaskRef (*)(CFAllocatorRef))dlsym(sec, "SecTaskCreateFromSelf");
+    CFTypeRef (*hbSecTaskCopyValueForEntitlement)(HBSecTaskRef, CFStringRef, CFErrorRef *) =
+        (CFTypeRef (*)(HBSecTaskRef, CFStringRef, CFErrorRef *))dlsym(sec, "SecTaskCopyValueForEntitlement");
+
+    if (!hbSecTaskCreateFromSelf || !hbSecTaskCopyValueForEntitlement) {
+        HBLog(@"[HealthBoost] ENT: SecTask 符号不可用（iOS 未导出），跳过检查");
+        return;
+    }
+
+    HBSecTaskRef task = hbSecTaskCreateFromSelf(kCFAllocatorDefault);
+    if (!task) {
+        HBLog(@"[HealthBoost] ENT: SecTaskCreateFromSelf 返回 NULL");
+        return;
+    }
+
     NSArray *keys = @[
         @"com.apple.private.healthkit.source_override",
         @"com.apple.private.healthkit.authorization_bypass",
@@ -104,7 +127,7 @@ static void HBDumpEntitlements(void) {
         @"application-identifier",
     ];
     for (NSString *k in keys) {
-        CFTypeRef v = SecTaskCopyValueForEntitlement(task, (__bridge CFStringRef)k, NULL);
+        CFTypeRef v = hbSecTaskCopyValueForEntitlement(task, (__bridge CFStringRef)k, NULL);
         if (v) {
             HBLog(@"[HealthBoost] ENT %@ = %@", k, (__bridge id)v);
             CFRelease(v);
