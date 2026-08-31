@@ -1,7 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-VER="1.0.0-1"
+# 每次发布必须递增版本号：dpkg/Sileo 拒绝覆盖安装同版本号的包，
+# 版本号不变会直接导致「装不上」。
+VER="1.0.3-1"
 PKG="com.sykes.healthboost"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
 
@@ -55,12 +57,14 @@ else
 fi
 
 echo "[5/5] 创建 control / postinst / prerm / postrm 并打包"
-cat > staging/DEBIAN/control << 'EOF'
+# 注意：这里用 << EOF（不带引号）让 ${VER} 能被展开；
+# 若写成 << 'EOF' 则变量不展开，control 里的 Version 会永远是字面量。
+cat > staging/DEBIAN/control << EOF
 Package: com.sykes.healthboost
 Name: HealthBoost
-Version: 1.0.0-1
+Version: ${VER}
 Architecture: iphoneos-arm64e
-Installed-Size: 400
+Installed-Size: 1024
 Depends: firmware (>= 13.0)
 Maintainer: sykeswzq
 Author: sykeswzq
@@ -71,9 +75,10 @@ EOF
 
 cat > staging/DEBIAN/postinst << 'EOF'
 #!/bin/sh
-# 刷新图标缓存。只用 uicache（仅重建图标数据库，不杀 SpringBoard），
-# 绝不用 sbreload / killall backboardd —— 安装器 Sileo 跑在 SpringBoard 里，
-# 杀掉它会导致 dpkg 被中断。
+# 刷新图标缓存。只用 uicache（仅重建图标数据库，不杀 SpringBoard）。
+# 绝不用 sbreload / killall backboardd / reboot ——
+# 安装器 Sileo 跑在 SpringBoard 里，杀掉或重启会导致 dpkg 被中断，
+# 包状态卡在 half-installed，之后再装就一直报「安装失败」。
 if [ -x /var/jb/usr/bin/uicache ]; then
   /var/jb/usr/bin/uicache -p /var/jb/Applications/HealthBoost.app 2>/dev/null || true
   /var/jb/usr/bin/uicache -a 2>/dev/null || true

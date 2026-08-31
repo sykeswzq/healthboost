@@ -31,11 +31,16 @@ jobs:
 
       - name: Verify binary
         run: |
+          # 版本号会递增，用通配符定位，避免硬编码文件名导致找不到
+          DEB=$(ls com.sykes.healthboost_*_iphoneos-arm64e.deb | head -1)
+          echo "deb file: $DEB"
+          echo "=== control Version ==="
+          dpkg-deb -f "$DEB" Version
           echo "=== deb contents ==="
-          dpkg-deb -c com.sykes.healthboost_1.0.0-1_iphoneos-arm64e.deb
+          dpkg-deb -c "$DEB"
           echo "=== app executable header ==="
           mkdir -p /tmp/hbcheck
-          dpkg-deb -x com.sykes.healthboost_1.0.0-1_iphoneos-arm64e.deb /tmp/hbcheck
+          dpkg-deb -x "$DEB" /tmp/hbcheck
           APPBIN=/tmp/hbcheck/var/jb/Applications/HealthBoost.app/HealthBoostApp
           ls -la "$APPBIN"
           echo "app header: $(head -c 4 "$APPBIN" | xxd -p)"
@@ -46,5 +51,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: healthboost-deb
-          path: com.sykes.healthboost_1.0.0-1_iphoneos-arm64e.deb
+          path: com.sykes.healthboost_*_iphoneos-arm64e.deb
           retention-days: 30
