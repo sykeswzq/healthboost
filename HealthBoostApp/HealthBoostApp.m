@@ -90,6 +90,22 @@ static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NS
     free(methods);
 }
 
+// 把步数写到 CFPreferences，供微信进程里的 tweak dylib 读取。
+// 域名刻意用 com.apple. 开头：系统域在越狱环境下跨沙盒可见，
+// UCStep 用的 com.apple.mobile.ifucstepcommon 也是同样手法。
+// 这一步与写 HealthKit 是两条独立链路：HealthKit 管「健康」App，这里管「微信运动」。
+static void HBWriteStepsPreference(long steps) {
+    CFPreferencesSetValue(CFSTR("steps"),
+                          (__bridge CFNumberRef)@(steps),
+                          CFSTR("com.apple.mobile.healthboost"),
+                          kCFPreferencesAnyUser,
+                          kCFPreferencesAnyHost);
+    BOOL ok = CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"),
+                                       kCFPreferencesAnyUser,
+                                       kCFPreferencesAnyHost);
+    HBLog(@"[HealthBoost] 已写入步数偏好 %ld (sync=%d)，供微信 tweak 读取", steps, ok);
+}
+
 // 读取自身 entitlements 的实际生效值
 // 目的：确认 ldid 签的 com.apple.private.healthkit.source_override 到底有没有被系统认可。
 // 注意：SecTask 系列在 iOS SDK 中没有公开头文件（属 macOS 私有 API），
@@ -584,6 +600,9 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     long flights = [self.flightsField.text integerValue];
     if (flights < 0) flights = 0;
     [self saveSettings];
+
+    // 写给微信 tweak 的步数（与 HealthKit 写入相互独立，即便 HealthKit 失败也照样生效）
+    HBWriteStepsPreference(steps);
 
     if (![HKHealthStore isHealthDataAvailable]) {
         [self updateStatus:@"此设备不支持健康数据"];

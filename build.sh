@@ -36,6 +36,44 @@ xcrun --sdk iphoneos clang \
 chmod 755 staging/var/jb/Applications/HealthBoost.app/HealthBoostApp
 echo "  app: $(wc -c < staging/var/jb/Applications/HealthBoost.app/HealthBoostApp) bytes"
 
+echo "[2.5/5] 编译注入微信的 tweak dylib"
+# 关键：写 HealthKit 只能改「健康」App；要让「微信运动」显示必须 hook 微信进程。
+# 逆向 UCStep 6.0.6 确认目标为 WCDeviceStepObject 的
+# stepCount / hkStepCount / m7StepCount（m7 = M7 协处理器，微信优先用这个）。
+# 不链接 CydiaSubstrate，纯 Objective-C runtime 替换，由 MobileSubstrate 按 plist 注入。
+mkdir -p staging/var/jb/Library/MobileSubstrate/DynamicLibraries
+xcrun --sdk iphoneos clang \
+  -dynamiclib \
+  -framework Foundation \
+  -fobjc-arc \
+  -arch arm64 -arch arm64e \
+  -mios-version-min=13.0 \
+  -isysroot "$SDK" \
+  -o staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.dylib \
+  HBTweak/HBTweak.m
+chmod 755 staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.dylib
+echo "  dylib: $(wc -c < staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.dylib) bytes"
+
+# 注入 filter：微信（UGGD 为微信可执行文件/旧版标识，两个都写上以防万一）
+cat > staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.plist << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Filter</key>
+	<dict>
+		<key>Bundles</key>
+		<array>
+			<string>com.tencent.xin</string>
+			<string>UGGD</string>
+		</array>
+	</dict>
+</dict>
+</plist>
+EOF
+chmod 644 staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.plist
+echo "  已生成注入 filter (com.tencent.xin / UGGD)"
+
 echo "[3/5] 拷贝 App 资源"
 cp HealthBoostApp/HealthBoost/Info.plist  staging/var/jb/Applications/HealthBoost.app/
 cp HealthBoostApp/HealthBoost/AppIcon60x60@2x.png staging/var/jb/Applications/HealthBoost.app/
