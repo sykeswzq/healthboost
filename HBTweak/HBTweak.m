@@ -15,69 +15,183 @@
 //       - 本 tweak hook 微信      -> 让「微信运动」显示
 //   两者缺一不可。
 //
-// 跨进程传值：App 用 CFPreferences 写到 com.apple.mobile.healthboost 域，
-// 本 tweak 在微信进程里读同一个域。域名以 com.apple. 开头是刻意的——
-// 系统域在越狱环境下跨沙盒可见（UCStep 用的 com.apple.mobile.ifucstepcommon 同理）。
+// 跨进程传值（关键改进 v76）：
+//   v75 只用 CFPreferences（com.apple.mobile.healthboost）。在 roothide 下，
+//   App（装在 /var/jb/Applications）和微信（装在 /var/containers）对 CFPreferences
+//   的落盘路径可能被不同重定向，导致微信读不到 App 写的值。
+//   所以 v76 改为「文件优先」：App 把步数写到
+//       /var/mobile/Media/HealthBoost/hb_steps.txt
+//   这是真实共享路径，双方都看得到，最稳。CFPreferences 作为兜底保留。
 //
-// 不依赖 CydiaSubstrate/ElleKit：直接用 Objective-C runtime 的
-// class_replaceMethod 做替换，dylib 由 MobileSubstrate 按 plist filter 注入。
+// 致命缺陷修复（v76 核心）：
+//   v75 在 dylib 的 @constructor 里直接 NSClassFromString(@"WCDeviceStepObject")
+//   并 hook。但 @constructor 执行时微信自己的私有步数框架可能还没加载，
+//   类不存在 -> hook 被静默跳过 -> tweak 完全不生效（用户看到的就是「微信没用」）。
+//   v76 改为：先在 constructor 尝试 hook；若类还没加载，则在主线程 dispatch_after
+//   里重试最多 5 次（每次隔 2 秒），直到类可用再 hook。
+//
+// 可诊断性（v76 新增）：
+//   用户无法访问系统日志/Console，所以 tweak 把关键事件写进
+//       /var/mobile/Media/HealthBoost/tweak_log.txt
+//   用户点 HealthBoost App 的「查看日志」即可看到 tweak 是否加载、类是否找到、
+//   步数 getter 被调用时返回的是假值还是原值。
 
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
+#import <unistd.h>
 
-#define HB_PREF_DOMAIN CFSTR("com.apple.mobile.healthboost")
-#define HB_PREF_KEY    CFSTR("steps")
+// ---- 路径定义 ----
+#define HB_STEPS_FILE     @"/var/mobile/Media/HealthBoost/hb_steps.txt"
+#define HB_TWEAK_LOG_PATH @"/var/mobile/Media/HealthBoost/tweak_log.txt"
+#define HB_PREF_DOMAIN    CFSTR("com.apple.mobile.healthboost")
+#define HB_PREF_KEY       CFSTR("steps")
+#define HB_TWEAK_MAX_LINES 140
 
-// 读取 App 设定的步数；未设置或为 0 时返回 -1（表示不劫持）
-static long HBConfiguredSteps(void) {
-    CFPropertyListRef v = CFPreferencesCopyValue(HB_PREF_KEY, HB_PREF_DOMAIN,
-                                                 kCFPreferencesAnyUser, kCFPreferencesAnyHost);
-    if (!v) return -1;
-    long steps = -1;
-    if (CFGetTypeID(v) == CFNumberGetTypeID()) {
-        CFNumberGetValue((CFNumberRef)v, kCFNumberLongType, &steps);
-    } else if (CFGetTypeID(v) == CFStringGetTypeID()) {
-        steps = (long)[(__bridge NSString *)v longLongValue];
+// MARK: - 诊断日志（用户可读，App「查看日志」会显示）
+
+static void HBTweakLog(NSString *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
+    va_end(args);
+
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    df.dateFormat = @"HH:mm:ss.SSS";
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [df stringFromDate:[NSDate date]], msg];
+
+    NSString *path = HB_TWEAK_LOG_PATH;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [path stringByDeletingLastPathComponent];
+    if (![fm fileExistsAtPath:dir]) {
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     }
-    CFRelease(v);
-    return steps;
+
+    NSString *old = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    NSMutableArray *lines = [NSMutableArray array];
+    if (old.length > 0) {
+        [lines addObjectsFromArray:[old componentsSeparatedByString:@"\n"]];
+        while (lines.count > 0 && [lines.lastObject length] == 0) [lines removeLastObject];
+    }
+    [lines addObject:line];
+    while (lines.count > HB_TWEAK_MAX_LINES) [lines removeObjectAtIndex:0];
+
+    NSString *out = [lines componentsJoinedByString:@"\n"];
+    if (lines.count > 0) out = [out stringByAppendingString:@"\n"];
+    [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
-// 通用替换：把 cls 的 sel 实现换成 newImp，原实现存入 origImp
+// MARK: - 读取 App 设定的步数
+
+// 1) 文件优先（roothide 下最稳的跨进程通道）
+// 2) CFPreferences 兜底
+// 返回 -1 表示「未配置 / 配置为 0」-> 不劫持，走原值
+static long HBConfiguredSteps(void) {
+    // 1) 文件
+    NSString *c = [NSString stringWithContentsOfFile:HB_STEPS_FILE
+                                           encoding:NSUTF8StringEncoding error:nil];
+    if (c.length > 0) {
+        NSArray *parts = [c componentsSeparatedByString:@"\n"];
+        NSString *first = [parts.firstObject stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (first.length > 0) {
+            long v = (long)[first longLongValue];
+            if (v > 0) return v;
+        }
+    }
+    // 2) CFPreferences 兜底
+    CFPropertyListRef v = CFPreferencesCopyValue(HB_PREF_KEY, HB_PREF_DOMAIN,
+                                                 kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+    if (v) {
+        long steps = -1;
+        if (CFGetTypeID(v) == CFNumberGetTypeID()) {
+            CFNumberGetValue((CFNumberRef)v, kCFNumberLongType, &steps);
+        } else if (CFGetTypeID(v) == CFStringGetTypeID()) {
+            steps = (long)[(__bridge NSString *)v longLongValue];
+        }
+        CFRelease(v);
+        if (steps > 0) return steps;
+    }
+    return -1;
+}
+
+// MARK: - 通用替换（带缺失保护）
+
 static void HBReplace(Class cls, SEL sel, IMP newImp, IMP *origImp) {
     if (!cls || !sel || !newImp) return;
     Method m = class_getInstanceMethod(cls, sel);
-    if (!m) return;
+    if (!m) {
+        HBTweakLog(@"WARN: %s 在 %s 上不存在，跳过 hook",
+                   sel_getName(sel), class_getName(cls));
+        return;
+    }
     IMP orig = method_getImplementation(m);
     if (origImp) *origImp = orig;
     class_replaceMethod(cls, sel, newImp, method_getTypeEncoding(m));
 }
 
-// MARK: - WCDeviceStepObject 的 stepCount / hkStepCount / m7StepCount
-// 这三个都是返回整数的无参 getter。用统一的 NSInteger(^)(id, SEL) 签名处理。
+// MARK: - 步数 getter 统一实现
 
 typedef NSInteger (*HBStepGetter)(id, SEL);
+static HBStepGetter gOrig_stepCount   = NULL;
+static HBStepGetter gOrig_hkStepCount = NULL;
+static HBStepGetter gOrig_m7StepCount = NULL;
 
-static HBStepGetter gOrig_stepCount    = NULL;
-static HBStepGetter gOrig_hkStepCount  = NULL;
-static HBStepGetter gOrig_m7StepCount  = NULL;
+static int  gCallCount       = 0;
+static BOOL gLoggedFake       = NO;
+static BOOL gLoggedOriginal   = NO;
+
+static NSInteger HBReturnSteps(HBStepGetter orig, id self, SEL _cmd, const char *name) {
+    long s = HBConfiguredSteps();
+    gCallCount++;
+    if (s >= 0) {
+        if (!gLoggedFake) {
+            gLoggedFake = YES;
+            HBTweakLog(@"GETTER %s -> 返回假步数 %ld (第%d次调用)", name, s, gCallCount);
+        } else if (gCallCount % 500 == 0) {
+            HBTweakLog(@"GETTER %s -> 返回假步数 %ld (第%d次调用)", name, s, gCallCount);
+        }
+        return (NSInteger)s;
+    }
+    if (!gLoggedOriginal) {
+        gLoggedOriginal = YES;
+        HBTweakLog(@"GETTER %s -> 返回原值（未配置假步数）", name);
+    }
+    return orig ? orig(self, _cmd) : 0;
+}
 
 static NSInteger HB_stepCount(id self, SEL _cmd) {
-    long s = HBConfiguredSteps();
-    if (s >= 0) return (NSInteger)s;
-    return gOrig_stepCount ? gOrig_stepCount(self, _cmd) : 0;
+    return HBReturnSteps(gOrig_stepCount, self, _cmd, "stepCount");
 }
-
 static NSInteger HB_hkStepCount(id self, SEL _cmd) {
-    long s = HBConfiguredSteps();
-    if (s >= 0) return (NSInteger)s;
-    return gOrig_hkStepCount ? gOrig_hkStepCount(self, _cmd) : 0;
+    return HBReturnSteps(gOrig_hkStepCount, self, _cmd, "hkStepCount");
+}
+static NSInteger HB_m7StepCount(id self, SEL _cmd) {
+    return HBReturnSteps(gOrig_m7StepCount, self, _cmd, "m7StepCount");
 }
 
-static NSInteger HB_m7StepCount(id self, SEL _cmd) {
-    long s = HBConfiguredSteps();
-    if (s >= 0) return (NSInteger)s;
-    return gOrig_m7StepCount ? gOrig_m7StepCount(self, _cmd) : 0;
+// MARK: - 安装 hook（可重试，解决类延迟加载问题）
+
+static BOOL HBInstallHooksOnce(void) {
+    static BOOL done = NO;
+    if (done) return YES;
+
+    Class wcCls = NSClassFromString(@"WCDeviceStepObject");
+    if (!wcCls) return NO;   // 类还没加载，等下次重试
+
+    HBReplace(wcCls, @selector(stepCount),   (IMP)HB_stepCount,   (IMP *)&gOrig_stepCount);
+    HBReplace(wcCls, @selector(hkStepCount), (IMP)HB_hkStepCount, (IMP *)&gOrig_hkStepCount);
+    HBReplace(wcCls, @selector(m7StepCount), (IMP)HB_m7StepCount, (IMP *)&gOrig_m7StepCount);
+
+    Class apCls = NSClassFromString(@"APStepInfo");
+    if (apCls) {
+        HBReplace(apCls, @selector(numberOfSteps), (IMP)HB_stepCount, NULL);
+    }
+
+    done = YES;
+    long cur = HBConfiguredSteps();
+    HBTweakLog(@"HOOK 完成: WCDeviceStepObject=YES, APStepInfo=%@, 当前配置步数=%ld",
+               apCls ? @"YES" : @"NO", cur);
+    return YES;
 }
 
 // MARK: - 构造函数（dylib 被注入时自动执行）
@@ -85,24 +199,29 @@ static NSInteger HB_m7StepCount(id self, SEL _cmd) {
 __attribute__((constructor))
 static void HBHealthBoostTweakInit(void) {
     @autoreleasepool {
-        // 只在微信进程里生效（filter 已限定，这里再兜一层）
         NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
-        BOOL isWeChat = [bid isEqualToString:@"com.tencent.xin"];
+        HBTweakLog(@"tweak 已加载, 进程=%@, pid=%d", bid, getpid());
 
-        Class wcCls = NSClassFromString(@"WCDeviceStepObject");
-        if (wcCls) {
-            HBReplace(wcCls, @selector(stepCount),    (IMP)HB_stepCount,    (IMP *)&gOrig_stepCount);
-            HBReplace(wcCls, @selector(hkStepCount),  (IMP)HB_hkStepCount,  (IMP *)&gOrig_hkStepCount);
-            HBReplace(wcCls, @selector(m7StepCount),  (IMP)HB_m7StepCount,  (IMP *)&gOrig_m7StepCount);
+        // 只处理微信进程（filter 已限定，这里再兜一层）
+        if (![bid isEqualToString:@"com.tencent.xin"]) {
+            HBTweakLog(@"非微信进程，跳过 hook (bid=%@)", bid);
+            return;
         }
 
-        // 支付宝步数服务（UCStep 也 hook 了，一并带上）
-        Class apCls = NSClassFromString(@"APStepInfo");
-        if (apCls) {
-            HBReplace(apCls, @selector(numberOfSteps), (IMP)HB_stepCount, NULL);
-        }
+        // 立即尝试一次
+        if (HBInstallHooksOnce()) return;
 
-        NSLog(@"[HealthBoost] tweak loaded in %@ (WCDeviceStepObject=%@, APStepInfo=%@)",
-              bid, wcCls ? @"YES" : @"NO", apCls ? @"YES" : @"NO");
+        // 类还没加载：主线程延迟重试（类通常在 App 启动后几秒内可用）
+        HBTweakLog(@"WCDeviceStepObject 尚未加载，安排主线程重试");
+        for (NSInteger i = 1; i <= 5; i++) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 2 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                if (HBInstallHooksOnce()) {
+                    HBTweakLog(@"hook 在第 %ld 次重试时安装成功", (long)i);
+                } else if (i == 5) {
+                    HBTweakLog(@"错误: 5 次重试后仍找不到 WCDeviceStepObject，hook 失败");
+                }
+            });
+        }
     }
 }

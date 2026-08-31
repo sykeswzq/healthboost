@@ -90,11 +90,28 @@ static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NS
     free(methods);
 }
 
-// 把步数写到 CFPreferences，供微信进程里的 tweak dylib 读取。
-// 域名刻意用 com.apple. 开头：系统域在越狱环境下跨沙盒可见，
-// UCStep 用的 com.apple.mobile.ifucstepcommon 也是同样手法。
+// 把步数写到「供微信 tweak 读取」的通道。
+// 双通道（v76 起）：
+//   1) 文件 /var/mobile/Media/HealthBoost/hb_steps.txt —— 真实共享路径，roothide 下最稳，
+//      微信进程里的 tweak 直接读这个文件。这是主通道。
+//   2) CFPreferences com.apple.mobile.healthboost —— 兜底。
 // 这一步与写 HealthKit 是两条独立链路：HealthKit 管「健康」App，这里管「微信运动」。
+static void HBWriteStepsFile(long steps) {
+    NSString *dir = @"/var/mobile/Media/HealthBoost";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:dir]) {
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    NSString *path = [dir stringByAppendingPathComponent:@"hb_steps.txt"];
+    NSString *content = [NSString stringWithFormat:@"%ld\n", steps];
+    BOOL ok = [content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    HBLog(@"[HealthBoost] 已写入步数文件 %ld (file=%d) @ %@", steps, ok, path);
+}
+
 static void HBWriteStepsPreference(long steps) {
+    // 主通道：文件
+    HBWriteStepsFile(steps);
+    // 兜底：CFPreferences
     CFPreferencesSetValue(CFSTR("steps"),
                           (__bridge CFNumberRef)@(steps),
                           CFSTR("com.apple.mobile.healthboost"),
@@ -391,6 +408,13 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     [self.view addSubview:respringBtn];
     y += 56;
 
+    // 重启微信 按钮（关键：tweak 只在微信启动时加载，装完/改完步数后必须重启微信才能生效）
+    UIButton *killWCBtn = [self roundedButton:@"重启微信(让步数生效)" color:[UIColor systemIndigoColor]];
+    killWCBtn.frame = CGRectMake(margin, y, w - margin*2, 44);
+    [killWCBtn addTarget:self action:@selector(killWeChatTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:killWCBtn];
+    y += 56;
+
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
     [self.view addGestureRecognizer:tap];
 
@@ -537,6 +561,26 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     }
 }
 
+// 杀掉微信进程，让 tweak 在微信下次启动时重新注入。
+// 关键说明：注入微信的 tweak 只在「微信进程启动」那一刻加载。
+// 装完 v76 或改完步数后，必须让微信彻底退出再重开，tweak 才会生效。
+// （Sileo 安装不会杀微信，所以这一步必须由用户/本按钮触发。）
+- (void)killWeChatTapped:(UIButton *)sender {
+    HBLog(@"[HealthBoost] 请求重启微信 (killall WeChat)");
+    [self updateStatus:@"正在重启微信..."];
+    int pid = fork();
+    if (pid == 0) {
+        // 子进程：-9 强制退出，微信下次打开时加载新 tweak
+        execlp("killall", "killall", "-9", "WeChat", nil);
+        _exit(1);
+    } else if (pid > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self updateStatus:@"微信已重启，请重新打开微信运动"];
+            [self showAlert:@"完成" message:@"微信已强制退出。\n请重新打开微信，进入「微信运动」即可看到写入的步数。\n若仍不对，点「查看日志」把 tweak_log 部分发我。"];
+        });
+    }
+}
+
 - (void)viewLogTapped:(UIButton *)sender {
     NSString *sharedPath = HBSharedLogPath();
     NSString *sandboxPath = HBSandboxLogPath();
@@ -551,11 +595,26 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     } else {
         content = sandbox;
     }
-    if (!content || content.length == 0) content = @"（暂无日志记录）";
+    if (!content || content.length == 0) content = @"（暂无 App 日志记录）";
 
-    // 日志已限制在 HB_MAX_LOG_LINES 行，直接显示完整内容
-    NSString *header = @"路径：/var/mobile/Media/HealthBoost/hb_log.txt\n\n";
-    NSString *full = [header stringByAppendingString:content];
+    // 同时读取 tweak 的诊断日志（微信注入是否成功、步数 getter 被调用情况）
+    NSString *tweakLogPath = @"/var/mobile/Media/HealthBoost/tweak_log.txt";
+    NSString *tweakLog = [NSString stringWithContentsOfFile:tweakLogPath
+                                                  encoding:NSUTF8StringEncoding error:nil];
+    if (!tweakLog || tweakLog.length == 0) {
+        tweakLog = @"（暂无 tweak 日志 —— 说明微信可能还没被注入 / 未重启过微信）";
+    }
+
+    // 组合：App 日志 + tweak 日志（tweak 日志最关键）
+    NSMutableString *body = [NSMutableString string];
+    [body appendString:@"===== App 运行日志 =====\n"];
+    [body appendString:content];
+    [body appendString:@"\n\n===== 微信注入日志 (tweak) =====\n"];
+    [body appendString:tweakLog];
+
+    // 日志已限制在行数内，直接显示完整内容
+    NSString *header = @"路径：/var/mobile/Media/HealthBoost/hb_log.txt / tweak_log.txt\n\n";
+    NSString *full = [header stringByAppendingString:body];
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"运行日志"
                                                                    message:full
@@ -563,7 +622,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
     [alert addAction:[UIAlertAction actionWithTitle:@"复制日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         // 复制时只复制日志正文（不含路径头），且最多 30000 字符
-        NSString *toCopy = content;
+        NSString *toCopy = body;
         if (toCopy.length > 30000) {
             toCopy = [toCopy substringFromIndex:toCopy.length - 30000];
         }
@@ -895,9 +954,10 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     NSString *mode = deviceRev ? @"设备源(已注入)" : @"设备源(仅 HKDevice)";
     NSString *msg = [NSString stringWithFormat:
         @"已写入 Apple Health\n来源模式：%@\n\n"
-        @"请打开「健康」App 查看；\n"
-        @"若仍为空，点「查看日志」把内容发来，\n"
-        @"日志里有 VERIFY 开头的回读校验结果。", mode];
+        @"要让「微信运动」也显示，请点下方的\n"
+        @"「重启微信(让步数生效)」按钮，\n"
+        @"然后重新打开微信运动查看。\n"
+        @"若微信仍不对，点「查看日志」把内容发我。", mode];
     [self showAlert:@"完成" message:msg];
 }
 
