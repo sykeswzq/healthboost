@@ -202,24 +202,27 @@ static void HBHealthBoostTweakInit(void) {
         NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
         HBTweakLog(@"tweak 已加载, 进程=%@, pid=%d", bid, getpid());
 
-        // 只处理微信进程（filter 已限定，这里再兜一层）
-        if (![bid isEqualToString:@"com.tencent.xin"]) {
-            HBTweakLog(@"非微信进程，跳过 hook (bid=%@)", bid);
+        // 【v77 修复】去掉自杀式 bundle 强校验。
+        // 之前写 if (![bid isEqualToString:@"com.tencent.xin"]) return;
+        // 但微信步数进程的真实 bundle 是 UGGD（UCStep 的 filter 即为 UGGD），
+        // 注入进 UGGD 后 bid=UGGD ≠ com.tencent.xin 被直接 return，导致 hook 从不执行。
+        // 现在由 plist 的 Filter 控制注入目标，这里不再拦截，任何被注入的进程都尝试 hook。
+
+        // 立即尝试一次
+        if (HBInstallHooksOnce()) {
+            HBTweakLog(@"首次尝试即 hook 完成 (进程=%@)", bid);
             return;
         }
 
-        // 立即尝试一次
-        if (HBInstallHooksOnce()) return;
-
         // 类还没加载：主线程延迟重试（类通常在 App 启动后几秒内可用）
-        HBTweakLog(@"WCDeviceStepObject 尚未加载，安排主线程重试");
-        for (NSInteger i = 1; i <= 5; i++) {
+        HBTweakLog(@"WCDeviceStepObject 尚未加载，安排主线程重试 (进程=%@)", bid);
+        for (NSInteger i = 1; i <= 8; i++) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 2 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 if (HBInstallHooksOnce()) {
-                    HBTweakLog(@"hook 在第 %ld 次重试时安装成功", (long)i);
-                } else if (i == 5) {
-                    HBTweakLog(@"错误: 5 次重试后仍找不到 WCDeviceStepObject，hook 失败");
+                    HBTweakLog(@"hook 在第 %ld 次重试时安装成功 (进程=%@)", (long)i, bid);
+                } else if (i == 8) {
+                    HBTweakLog(@"错误: 8 次重试后仍找不到 WCDeviceStepObject (进程=%@)，hook 失败", bid);
                 }
             });
         }

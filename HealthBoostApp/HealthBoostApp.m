@@ -571,6 +571,8 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     int pid = fork();
     if (pid == 0) {
         // 子进程：-9 强制退出，微信下次打开时加载新 tweak
+        // 优先用 roothide 绝对路径（PATH 可能不含 /var/jb/bin），失败再回退 PATH 查找
+        execlp("/var/jb/bin/killall", "killall", "-9", "WeChat", nil);
         execlp("killall", "killall", "-9", "WeChat", nil);
         _exit(1);
     } else if (pid > 0) {
