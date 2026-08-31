@@ -4,6 +4,7 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <HealthKit/HealthKit.h>
+#import <objc/runtime.h>
 
 static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 
@@ -52,6 +53,67 @@ static void HBAppendLine(NSString *path, NSString *line) {
 // 外部共享日志路径（Files App 可见）
 static NSString *HBSharedLogPath(void) {
     return @"/var/mobile/Media/HealthBoost/hb_log.txt";
+}
+
+// API 探测输出路径：把 HealthKit 相关类的全部方法（含私有）导出到这里，
+// 用于定位真正能改写 sample 来源的私有初始化器 / 保存入口。
+static NSString *HBAPIDumpPath(void) {
+    return @"/var/mobile/Media/HealthBoost/api_dump.txt";
+}
+
+// 枚举某个类的所有实例方法（含私有），追加到 out
+static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NSArray *keywords) {
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        SEL sel = method_getName(methods[i]);
+        const char *name = sel_getName(sel);
+        if (name == NULL) continue;
+        NSString *sn = [NSString stringWithUTF8String:name];
+        // 若给了关键字，只输出命中的；否则全输出
+        BOOL hit = (keywords == nil);
+        for (NSString *kw in keywords) {
+            if ([sn rangeOfString:kw options:NSCaseInsensitiveSearch].length > 0) { hit = YES; break; }
+        }
+        if (hit) {
+            [out appendFormat:@"%@ : %@\n", clsName, sn];
+        }
+    }
+    free(methods);
+}
+
+// 导出 API 清单到共享目录（不受日志行数限制）
+static void HBDumpHealthKitAPIs(void) {
+    NSMutableString *out = [NSMutableString string];
+    [out appendString:@"=== HealthKit 私有 API 探测 ===\n\n"];
+
+    // 只关心与「来源 / 初始化 / 保存」相关的方法，避免文件过大
+    NSArray *kws = @[@"init", @"source", @"save", @"revision", @"device", @"insert", @"add", @"origin"];
+
+    [out appendString:@"--- HKQuantitySample ---\n"];
+    HBDumpMethods(out, [HKQuantitySample class], @"HKQuantitySample", kws);
+
+    [out appendString:@"\n--- HKSample ---\n"];
+    HBDumpMethods(out, [HKSample class], @"HKSample", kws);
+
+    [out appendString:@"\n--- HKSourceRevision ---\n"];
+    HBDumpMethods(out, [HKSourceRevision class], @"HKSourceRevision", nil);
+
+    [out appendString:@"\n--- HKSource ---\n"];
+    HBDumpMethods(out, [HKSource class], @"HKSource", nil);
+
+    [out appendString:@"\n--- HKHealthStore (save/delete 相关) ---\n"];
+    HBDumpMethods(out, [HKHealthStore class], @"HKHealthStore", @[@"save", @"delete", @"insert", @"add"]);
+
+    [out appendString:@"\n--- HKQuantitySample 全部方法 ---\n"];
+    HBDumpMethods(out, [HKQuantitySample class], @"HKQuantitySample", nil);
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [HBAPIDumpPath() stringByDeletingLastPathComponent];
+    if (![fm fileExistsAtPath:dir]) {
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    [out writeToFile:HBAPIDumpPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
 // 沙盒内日志路径（保底）
@@ -270,6 +332,10 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     HBLog(@"[HealthBoost] 共享日志文件 = %@ (存在=%d)",
           HBSharedLogPath(),
           [fm fileExistsAtPath:HBSharedLogPath()]);
+
+    // 导出 HealthKit 私有 API 清单，用于定位改写样本来源的入口
+    HBDumpHealthKitAPIs();
+    HBLog(@"[HealthBoost] API 清单已导出: %@", HBAPIDumpPath());
 }
 
 - (CGFloat)addSectionTitle:(NSString *)text y:(CGFloat)y {
@@ -570,15 +636,26 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
         NSArray *samples = results ?: @[];
         HBLog(@"[HealthBoost] today %lu samples", (unsigned long)samples.count);
 
-        // 找出设备源样本
+        // 找出要清理的样本：设备源(真机步数) + 本 App 源(往次写入)
+        // 关键：实测 source_override 未生效，写入的样本来源其实是 com.sykes.healthboost.app，
+        // 若只匹配设备源会导致一条都删不掉 → 每次写入都累加。必须把本 App 源也纳入。
+        HKSource *defaultSource = [HKSource defaultSource];
+        NSString *myBid = defaultSource.bundleIdentifier;
+        HBLog(@"[HealthBoost] defaultSource bid = %@", myBid ?: @"(nil)");
+
         NSMutableArray *deviceSamples = [NSMutableArray array];
         for (HKSample *s in samples) {
-            NSString *bid = s.source.bundleIdentifier;
-            if (bid == nil || [bid hasPrefix:@"com.apple.health."]) {
+            HKSourceRevision *rev = s.sourceRevision;
+            NSString *bid = rev.source.bundleIdentifier;
+            BOOL isDevice = (bid == nil);
+            BOOL isHealthApp = (bid != nil && [bid hasPrefix:@"com.apple.health."]);
+            BOOL isMine = (myBid != nil && bid != nil && [bid isEqualToString:myBid]);
+            if (isDevice || isHealthApp || isMine) {
                 [deviceSamples addObject:s];
             }
         }
-        HBLog(@"[HealthBoost] device samples to delete: %lu", (unsigned long)deviceSamples.count);
+        HBLog(@"[HealthBoost] samples to delete: %lu (of %lu)",
+              (unsigned long)deviceSamples.count, (unsigned long)samples.count);
 
         // Step 2: 删除设备源样本（用 dispatch_group，内部原子计数，避免竞态）
         // 注意：旧代码用 __block NSUInteger remaining + --remaining 手工计数，
