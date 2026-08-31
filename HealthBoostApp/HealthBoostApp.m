@@ -13,25 +13,40 @@ static NSString * const HBSettingsKey = @"com.sykes.healthboost.settings";
 //   2) App 沙盒 Documents/hb_log.txt              —— 保底，App 内「查看日志」能读
 // App 带 com.apple.private.security.no-sandbox，可写沙盒外路径。
 
-// 追加一行到指定路径（文件不存在会自动创建）
+// 追加一行到指定路径，并自动裁剪为滚动日志（最多保留 HB_MAX_LOG_LINES 行）
+// 防止日志无限增长导致 UIPasteboard 复制失败 / 弹窗截断。
+static const NSInteger HB_MAX_LOG_LINES = 200;
+
 static void HBAppendLine(NSString *path, NSString *line) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *dir = [path stringByDeletingLastPathComponent];
     if (![fm fileExistsAtPath:dir]) {
         [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     }
-    if (![fm fileExistsAtPath:path]) {
-        [fm createFileAtPath:path contents:nil attributes:nil];
+
+    // 读取旧日志
+    NSString *old = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    NSMutableArray *lines = [NSMutableArray array];
+    if (old.length > 0) {
+        [lines addObjectsFromArray:[old componentsSeparatedByString:@"\n"]];
+        // 去掉末尾可能存在的空行
+        while (lines.count > 0 && [lines.lastObject length] == 0) {
+            [lines removeLastObject];
+        }
     }
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
-    if (!fh) return;
-    @try {
-        [fh seekToEndOfFile];
-        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-    } @catch (NSException *e) {
-        // 忽略写入异常，避免日志逻辑本身导致崩溃
+
+    // 追加新行
+    [lines addObject:line];
+
+    // 滚动裁剪：保留最后 HB_MAX_LOG_LINES 行
+    while (lines.count > HB_MAX_LOG_LINES) {
+        [lines removeObjectAtIndex:0];
     }
-    [fh closeFile];
+
+    // 写回
+    NSString *out = [lines componentsJoinedByString:@"\n"];
+    if (lines.count > 0) out = [out stringByAppendingString:@"\n"];
+    [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
 // 外部共享日志路径（Files App 可见）
@@ -390,31 +405,29 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
     // 取内容更长的那个（更完整）展示
     NSString *content = nil;
-    NSString *usedPath = nil;
     if (shared.length >= sandbox.length) {
         content = shared;
-        usedPath = sharedPath;
     } else {
         content = sandbox;
-        usedPath = sandboxPath;
     }
     if (!content || content.length == 0) content = @"（暂无日志记录）";
 
-    // 只保留最后 6000 字符，避免弹窗内容过长被系统截断
-    NSString *shown = content;
-    if (shown.length > 6000) {
-        shown = [@"...（已截断，仅显示最后部分）\n" stringByAppendingString:[shown substringFromIndex:shown.length - 6000]];
-    }
-
-    NSString *full = [NSString stringWithFormat:@"共享路径：/var/mobile/Media/HealthBoost/\n沙盒路径：%@\n\n%@", sandboxPath, shown];
+    // 日志已限制在 HB_MAX_LOG_LINES 行，直接显示完整内容
+    NSString *header = @"路径：/var/mobile/Media/HealthBoost/hb_log.txt\n\n";
+    NSString *full = [header stringByAppendingString:content];
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"运行日志"
                                                                    message:full
                                                             preferredStyle:UIAlertControllerStyleAlert];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"复制日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [UIPasteboard generalPasteboard].string = content;
-        [self updateStatus:@"日志已复制到剪贴板"];
+        // 复制时只复制日志正文（不含路径头），且最多 30000 字符
+        NSString *toCopy = content;
+        if (toCopy.length > 30000) {
+            toCopy = [toCopy substringFromIndex:toCopy.length - 30000];
+        }
+        [UIPasteboard generalPasteboard].string = toCopy;
+        [self updateStatus:@"日志已复制"];
     }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"清空日志" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
