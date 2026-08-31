@@ -1,9 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 
-# 每次发布必须递增版本号：dpkg/Sileo 拒绝覆盖安装同版本号的包，
-# 版本号不变会直接导致「装不上」。
-VER="1.0.3-1"
+# 版本号绑定 GitHub Actions 的 run 编号，每次构建自动递增，永不重复。
+# 原因：dpkg/Sileo 拒绝覆盖安装同版本号的包，版本号不变必然「装不上」。
+# 本地构建（无 GITHUB_RUN_NUMBER）时退回时间戳，同样保证不重复。
+if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
+  VER="1.0.${GITHUB_RUN_NUMBER}-1"
+else
+  VER="1.0.$(date +%s)-1"
+fi
+echo "版本号: $VER"
 PKG="com.sykes.healthboost"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
 
