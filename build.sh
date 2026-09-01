@@ -87,20 +87,10 @@ if [ ! -f HealthBoost.entitlements.plist ]; then
   echo "ERROR: HealthBoost.entitlements.plist 缺失，终止构建"
   exit 1
 fi
-# ellekit 要求 dylib 签名值固定（否则每次重装都报「files are corrupted」）。
-# 方案：把公钥/私钥做成仓库里固定文件（.gitkeep 占位），每次构建复用同一把密钥。
-if [ ! -f .ldid_key ]; then
-  echo "  生成固定 ldid 密钥（首次构建，仅一次）"
-  ldid -k .ldid_key 2>/dev/null || {
-    # 部分 ldid 版本用 -k 生成密钥失败时，手动造一把（RSA 2048 自签）
-    openssl genrsa -out .ldid_key 2048 2>/dev/null || {
-      echo "ERROR: 无法生成 ldid 密钥，ellekit 签名验证会失败"
-      exit 1
-    }
-  }
-  chmod 600 .ldid_key
-fi
-ldid -SHealthBoost.entitlements.plist -k .ldid_key staging/var/jb/Applications/HealthBoost.app/HealthBoostApp
+# 注：本机 ldid 为 procursus 2.1.5，没有 -k keyfile 选项；adhoc 伪签名（ldid -S）
+# 本身即对同一份二进制 + entitlements 产生确定且可复现的签名，无需固定密钥文件，
+# 因此 ellekit 不会因为「重装后签名值变了」而报 corrupted。
+ldid -SHealthBoost.entitlements.plist staging/var/jb/Applications/HealthBoost.app/HealthBoostApp
 echo "  已用 ldid 签名 App (含 healthkit)"
 # 验证签名确实带 healthkit 权限
 if ldid -e staging/var/jb/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null | grep -q "healthkit"; then
@@ -115,7 +105,7 @@ fi
 # 表现为 tweak 静默不生效且无任何日志。签上假名可以排除这个失效模式。
 DYLIB=staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.dylib
 before=$(wc -c < "$DYLIB")
-ldid -S -k .ldid_key "$DYLIB" 2>/dev/null || echo "  警告: dylib 签名未成功（通常无影响，继续打包）"
+ldid -S "$DYLIB" 2>/dev/null || echo "  警告: dylib 签名未成功（通常无影响，继续打包）"
 after=$(wc -c < "$DYLIB")
 # 签名后必须仍是合法 Mach-O（cafebabe=fat / feedface=arm64 / feedfacf=arm64e）
 magic=$(xxd -p -l4 "$DYLIB" 2>/dev/null || od -An -tx1 -N4 "$DYLIB" | tr -d ' \n')
@@ -233,7 +223,7 @@ cat > staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.plist << 'EO
 EOF
 chmod 644 staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.plist
 
-ldid -S -k .ldid_key staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib 2>/dev/null || echo "  警告: scout 签名未成功（继续）"
+ldid -S staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib 2>/dev/null || echo "  警告: scout 签名未成功（继续）"
 
 # 双路径部署
 cp staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib "$ROOTHIDE_DL/"
