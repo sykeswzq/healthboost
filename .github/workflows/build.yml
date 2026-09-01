@@ -51,5 +51,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: healthboost-deb
-          path: com.sykes.healthboost_*_iphoneos-arm64e.deb
+          path: "*.deb"
           retention-days: 30

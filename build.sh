@@ -198,3 +198,69 @@ chmod 755 staging/DEBIAN/postinst staging/DEBIAN/prerm staging/DEBIAN/postrm
 dpkg-deb -b -Zgzip staging "$OUT"
 echo "  -> $(ls -lh "$OUT" | awk '{print $5}') bytes"
 echo "DONE: $OUT"
+
+# ============================================================================
+# Scout 诊断 deb：注入所有进程，记录每个进程的真实 bundle id + 可执行名。
+# 无 Filter（= 注入全部进程），用于搞清楚微信在 roothide 下到底用什么标识运行，
+# 以便修正 HealthBoost 的 filter。构造函数只写日志，不 hook，注入到任何进程都安全。
+# ============================================================================
+echo "[6/6] 编译 Scout 诊断 dylib（注入所有进程，记录真实 bundle/executable）"
+mkdir -p staging/var/jb/Library/MobileSubstrate/DynamicLibraries
+xcrun --sdk iphoneos clang \
+  -dynamiclib \
+  -framework Foundation \
+  -framework UIKit \
+  -fobjc-arc \
+  -arch arm64 -arch arm64e \
+  -mios-version-min=13.0 \
+  -isysroot "$SDK" \
+  -o staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib \
+  scout/scout.m
+chmod 755 staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib
+echo "  scout dylib: $(wc -c < staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib) bytes"
+
+# 无 Filter -> 注入全部进程
+cat > staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.plist << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
+EOF
+chmod 644 staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.plist
+
+ldid -S staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib 2>/dev/null || echo "  警告: scout 签名未成功（继续）"
+
+# 双路径部署
+cp staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib "$ROOTHIDE_DL/"
+cp staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.plist "$ROOTHIDE_DL/"
+
+# 单独打包成 com.sykes.scout deb
+rm -rf scout_staging
+mkdir -p scout_staging/var/jb/Library/MobileSubstrate/DynamicLibraries
+mkdir -p scout_staging/var/roothide/Library/MobileSubstrate/DynamicLibraries
+mkdir -p scout_staging/DEBIAN
+cp staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib scout_staging/var/jb/Library/MobileSubstrate/DynamicLibraries/
+cp staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.plist  scout_staging/var/jb/Library/MobileSubstrate/DynamicLibraries/
+cp staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib scout_staging/var/roothide/Library/MobileSubstrate/DynamicLibraries/
+cp staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.plist  scout_staging/var/roothide/Library/MobileSubstrate/DynamicLibraries/
+
+cat > scout_staging/DEBIAN/control << EOF
+Package: com.sykes.scout
+Name: HBScout
+Version: ${VER}
+Architecture: iphoneos-arm64e
+Installed-Size: 256
+Depends: firmware (>= 13.0)
+Maintainer: sykeswzq
+Author: sykeswzq
+Description: Diagnostic: logs real bundle id + executable of every injected process.
+Section: utilities
+Priority: optional
+EOF
+
+SCOUT_OUT="com.sykes.scout_${VER}_iphoneos-arm64e.deb"
+dpkg-deb -b -Zgzip scout_staging "$SCOUT_OUT"
+echo "  -> $(ls -lh "$SCOUT_OUT" | awk '{print $5}') bytes"
+echo "DONE SCOUT: $SCOUT_OUT"
