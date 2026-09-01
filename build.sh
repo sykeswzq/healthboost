@@ -107,9 +107,10 @@ DYLIB=staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.dylib
 before=$(wc -c < "$DYLIB")
 ldid -S "$DYLIB" 2>/dev/null || echo "  警告: dylib 签名未成功（通常无影响，继续打包）"
 after=$(wc -c < "$DYLIB")
-# 签名后必须仍是合法 Mach-O（cafebabe=fat / feedface=arm64 / feedfacf=arm64e）
+# 签名后必须仍是合法 Mach-O。注意 xxd -p 输出的是小端字节序：
+#   cafebabe = fat(通用二进制) / cefaedfe = arm64 / cffaedfe = arm64e
 magic=$(xxd -p -l4 "$DYLIB" 2>/dev/null || od -An -tx1 -N4 "$DYLIB" | tr -d ' \n')
-if [ "$magic" != "cafebabe" ] && [ "$magic" != "feedface" ] && [ "$magic" != "feedfacf" ]; then
+if [ "$magic" != "cafebabe" ] && [ "$magic" != "cefaedfe" ] && [ "$magic" != "cffaedfe" ]; then
   echo "ERROR: dylib 签名后 Mach-O 头损坏 (magic=$magic)，终止构建"
   exit 1
 fi
