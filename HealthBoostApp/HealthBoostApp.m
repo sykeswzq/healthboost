@@ -108,10 +108,66 @@ static void HBWriteStepsFile(long steps) {
     HBLog(@"[HealthBoost] 已写入步数文件 %ld (file=%d) @ %@", steps, ok, path);
 }
 
+// 找到微信相关进程的数据容器路径。
+// 原理：微信是 App Store 应用，跑在沙盒里，**读不到** /var/mobile/Media/ 下的文件。
+// 但本 App 带 no-sandbox 权限，可以直接把步数文件写进微信自己的容器，
+// 微信对自己容器内的文件是必定可读的 —— 这是绕开沙盒最可靠的通道。
+// iOS 在每个数据容器根目录放 .com.apple.mobile_container_manager.metadata.plist，
+// 里面的 MCMMetadataIdentifier 就是该容器对应的 bundle id。
+static NSArray<NSString *> *HBWeChatContainerPaths(void) {
+    NSString *base = @"/var/mobile/Containers/Data/Application";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *dirs = [fm contentsOfDirectoryAtPath:base error:nil];
+    if (!dirs) {
+        HBLog(@"[HealthBoost] 容器扫描失败: /var/mobile/Containers/Data/Application 不可读");
+        return @[];
+    }
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *d in dirs) {
+        NSString *meta = [base stringByAppendingFormat:@"/%@/.com.apple.mobile_container_manager.metadata.plist", d];
+        NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:meta];
+        NSString *ident = dict[@"MCMMetadataIdentifier"];
+        if ([ident isEqualToString:@"com.tencent.xin"] || [ident isEqualToString:@"UGGD"]) {
+            [out addObject:[base stringByAppendingPathComponent:d]];
+            HBLog(@"[HealthBoost] 找到微信容器: %@ -> %@", ident, d);
+        }
+    }
+    return out;
+}
+
+// 把步数写进微信自己的容器（沙盒内可读），这是 v78 的主通道。
+static NSInteger HBWriteStepsToWeChatContainers(long steps) {
+    NSArray *containers = HBWeChatContainerPaths();
+    if (containers.count == 0) {
+        HBLog(@"[HealthBoost] 警告: 未找到微信容器，步数无法传给微信（微信可能未安装）");
+        return 0;
+    }
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSInteger okCount = 0;
+    NSString *content = [NSString stringWithFormat:@"%ld\n", steps];
+    for (NSString *c in containers) {
+        NSString *doc = [c stringByAppendingPathComponent:@"Documents"];
+        if (![fm fileExistsAtPath:doc]) {
+            [fm createDirectoryAtPath:doc withIntermediateDirectories:YES attributes:nil error:nil];
+        }
+        NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+        // 用 NSData 写并设 0644，确保微信进程（mobile 用户）可读
+        BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
+        if (ok) {
+            [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
+            okCount++;
+        }
+        HBLog(@"[HealthBoost] 写入容器步数 %ld -> %@ (ok=%d)", steps, path, ok);
+    }
+    return okCount;
+}
+
 static void HBWriteStepsPreference(long steps) {
-    // 主通道：文件
+    // 通道1（v78 新增，最可靠）：写进微信自己的容器，沙盒内必定可读
+    NSInteger nContainers = HBWriteStepsToWeChatContainers(steps);
+    // 通道2：共享 Media 目录（仅对无沙盒进程有效）
     HBWriteStepsFile(steps);
-    // 兜底：CFPreferences
+    // 通道3：CFPreferences 系统域（UCStep 同款跨沙盒手法）
     CFPreferencesSetValue(CFSTR("steps"),
                           (__bridge CFNumberRef)@(steps),
                           CFSTR("com.apple.mobile.healthboost"),
@@ -120,7 +176,52 @@ static void HBWriteStepsPreference(long steps) {
     BOOL ok = CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"),
                                        kCFPreferencesAnyUser,
                                        kCFPreferencesAnyHost);
-    HBLog(@"[HealthBoost] 已写入步数偏好 %ld (sync=%d)，供微信 tweak 读取", steps, ok);
+    HBLog(@"[HealthBoost] 步数通道写入完成: 容器=%ld个 Media=1 偏好sync=%d", (long)nContainers, ok);
+}
+
+// 扫描所有数据容器，收集 tweak 写下的诊断日志。
+// tweak 跑在微信沙盒里，写不了 /var/mobile/Media/，只能写自己容器的 Documents。
+// 本 App 无沙盒，可以遍历所有容器把它读回来。
+static NSString *HBCollectTweakLogs(void) {
+    NSMutableString *out = [NSMutableString string];
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    // 1) 共享位置（若 tweak 所在进程无沙盒，日志会在这里）
+    NSString *shared = [NSString stringWithContentsOfFile:@"/var/mobile/Media/HealthBoost/tweak_log.txt"
+                                                encoding:NSUTF8StringEncoding error:nil];
+    if (shared.length > 0) {
+        [out appendString:@"--- /var/mobile/Media/HealthBoost/tweak_log.txt ---\n"];
+        [out appendString:shared];
+        [out appendString:@"\n"];
+    }
+
+    // 2) 遍历所有数据容器的 Documents/hb_tweak_log.txt
+    NSString *base = @"/var/mobile/Containers/Data/Application";
+    NSArray *dirs = [fm contentsOfDirectoryAtPath:base error:nil];
+    NSInteger found = 0;
+    for (NSString *d in dirs) {
+        NSString *meta = [base stringByAppendingFormat:@"/%@/.com.apple.mobile_container_manager.metadata.plist", d];
+        NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:meta];
+        NSString *ident = dict[@"MCMMetadataIdentifier"] ?: @"(unknown)";
+
+        NSString *logPath = [base stringByAppendingFormat:@"/%@/Documents/hb_tweak_log.txt", d];
+        NSString *c = [NSString stringWithContentsOfFile:logPath
+                                              encoding:NSUTF8StringEncoding error:nil];
+        if (c.length > 0) {
+            found++;
+            [out appendFormat:@"--- 容器日志 [%@] ---\n%@\n", ident, c];
+        }
+    }
+
+    if (out.length == 0) {
+        return @"（未找到任何 tweak 日志）\n"
+               @"可能原因：\n"
+               @"  1. tweak 未被注入 —— 装完 deb 后必须彻底杀掉微信再重开；\n"
+               @"  2. 微信/UGGD 进程还没重启过；\n"
+               @"  3. 注入器（ElleKit/Substrate）未加载本 tweak。\n";
+    }
+    if (found == 0 && shared.length > 0) found = 1;
+    return out;
 }
 
 // 读取自身 entitlements 的实际生效值
@@ -599,13 +700,10 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     }
     if (!content || content.length == 0) content = @"（暂无 App 日志记录）";
 
-    // 同时读取 tweak 的诊断日志（微信注入是否成功、步数 getter 被调用情况）
-    NSString *tweakLogPath = @"/var/mobile/Media/HealthBoost/tweak_log.txt";
-    NSString *tweakLog = [NSString stringWithContentsOfFile:tweakLogPath
-                                                  encoding:NSUTF8StringEncoding error:nil];
-    if (!tweakLog || tweakLog.length == 0) {
-        tweakLog = @"（暂无 tweak 日志 —— 说明微信可能还没被注入 / 未重启过微信）";
-    }
+    // 读取 tweak 的诊断日志。
+    // v78: tweak 跑在微信沙盒里，日志只能写在微信自己的容器内，
+    // 所以需要遍历所有容器把它收集回来（本 App 无沙盒，可以读）。
+    NSString *tweakLog = HBCollectTweakLogs();
 
     // 组合：App 日志 + tweak 日志（tweak 日志最关键）
     NSMutableString *body = [NSMutableString string];
@@ -615,7 +713,8 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     [body appendString:tweakLog];
 
     // 日志已限制在行数内，直接显示完整内容
-    NSString *header = @"路径：/var/mobile/Media/HealthBoost/hb_log.txt / tweak_log.txt\n\n";
+    NSString *header = @"App日志: /var/mobile/Media/HealthBoost/hb_log.txt\n"
+                       @"tweak日志: 微信容器内 Documents/hb_tweak_log.txt\n\n";
     NSString *full = [header stringByAppendingString:body];
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"运行日志"
@@ -636,7 +735,15 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
         NSFileManager *fm = [NSFileManager defaultManager];
         [fm removeItemAtPath:sharedPath error:nil];
         [fm removeItemAtPath:sandboxPath error:nil];
-        HBLog(@"[HealthBoost] log cleared");
+        // 同时清掉容器里的 tweak 日志，保证下次看到的是全新诊断
+        NSString *base = @"/var/mobile/Containers/Data/Application";
+        NSArray *dirs = [fm contentsOfDirectoryAtPath:base error:nil];
+        if (!dirs) dirs = [NSArray array];
+        for (NSString *d in dirs) {
+            [fm removeItemAtPath:[base stringByAppendingFormat:@"/%@/Documents/hb_tweak_log.txt", d]
+                           error:nil];
+        }
+        HBLog(@"[HealthBoost] log cleared (含容器 tweak 日志)");
         [self updateStatus:@"日志已清空"];
     }]];
 
