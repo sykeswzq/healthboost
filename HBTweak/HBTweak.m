@@ -34,6 +34,8 @@
 #import <objc/runtime.h>
 #import <unistd.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 
 // ---- 路径与域 ----
 #define HB_STEPS_FILE      @"/var/mobile/Media/HealthBoost/hb_steps.txt"
