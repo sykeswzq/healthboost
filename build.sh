@@ -46,7 +46,7 @@ xcrun --sdk iphoneos clang \
   -dynamiclib \
   -framework Foundation \
   -fobjc-arc \
-  -arch arm64 -arch arm64e \
+  -arch arm64e \
   -mios-version-min=13.0 \
   -isysroot "$SDK" \
   -o staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.dylib \
@@ -164,6 +164,11 @@ elif [ -x /usr/bin/uicache ]; then
   /usr/bin/uicache -p /var/jb/Applications/HealthBoost.app 2>/dev/null || true
   /usr/bin/uicache -a 2>/dev/null || true
 fi
+# 清理 ellekit 缓存，避免重装后报 "files are corrupted"（best-effort，失败不影响安装）
+rm -rf /var/jb/usr/lib/ellekit/*.cache 2>/dev/null
+rm -rf /var/jb/Library/Caches/com.cycle.ellekit 2>/dev/null
+rm -rf /var/jb/var/mobile/Library/Caches/com.cycle.ellekit 2>/dev/null
+rm -rf /var/mobile/Library/Caches/com.cycle.ellekit 2>/dev/null
 exit 0
 EOF
 
@@ -204,7 +209,7 @@ xcrun --sdk iphoneos clang \
   -framework Foundation \
   -framework UIKit \
   -fobjc-arc \
-  -arch arm64 -arch arm64e \
+  -arch arm64e \
   -mios-version-min=13.0 \
   -isysroot "$SDK" \
   -o staging/var/jb/Library/MobileSubstrate/DynamicLibraries/Scout.dylib \
