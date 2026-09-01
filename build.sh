@@ -118,6 +118,25 @@ if [ "$magic" != "cafebabe" ] && [ "$magic" != "feedface" ] && [ "$magic" != "fe
 fi
 echo "  dylib 已签名: $before -> $after bytes (magic=$magic)"
 
+# ============================================================================
+# 双路径部署：同时把 tweak 放进 /var/roothide/ （roothide 越狱的加载器只读这个路径）
+# ----------------------------------------------------------------------------
+# 关键背景：参照 tweak UCStep（已知能改微信步数）的 deb 里，
+# 它的 dylib/plist 是放在 /var/roothide/Library/MobileSubstrate/DynamicLibraries/ 的，
+# 而不是 /var/jb/。如果用户实际跑的是「在 Dopamine 之上的 roothide」，
+# 越狱的 tweak 加载器只会扫 /var/roothide/，我在 /var/jb/ 下的 dylib 它根本看不见
+# —— 这正好解释「包能装上、但 tweak 从没跑过（连 SpringBoard 都没日志）」。
+# 同时写两个路径，覆盖纯 Dopamine rootless (/var/jb/) 与 roothide (/var/roothide/) 两种环境；
+# 多写的那个若环境不匹配会被加载器忽略，完全无害。
+# ============================================================================
+ROOTHIDE_DL="staging/var/roothide/Library/MobileSubstrate/DynamicLibraries"
+mkdir -p "$ROOTHIDE_DL"
+cp staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.dylib "$ROOTHIDE_DL/"
+cp staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.plist "$ROOTHIDE_DL/"
+chmod 755 "$ROOTHIDE_DL/HealthBoost.dylib"
+chmod 644 "$ROOTHIDE_DL/HealthBoost.plist"
+echo "  已镜像部署到 /var/roothide/ (roothide 兼容)"
+
 echo "[5/5] 创建 control / postinst / prerm / postrm 并打包"
 # 注意：这里用 << EOF（不带引号）让 ${VER} 能被展开；
 # 若写成 << 'EOF' 则变量不展开，control 里的 Version 会永远是字面量。
