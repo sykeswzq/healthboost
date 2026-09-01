@@ -73,8 +73,9 @@ static NSString *HBOwnStepsPath(void) {
 
 // MARK: - 诊断日志（双落点：自身容器优先，Media 兜底）
 
-static void HBTweakLogTo(NSString *path, NSString *line) {
-    if (!path) return;
+static BOOL HBTweakLogTo(NSString *path, NSString *line) {
+    if (!path) return NO;
+    BOOL ok = NO;
     @autoreleasepool {
         NSFileManager *fm = [NSFileManager defaultManager];
         NSString *dir = [path stringByDeletingLastPathComponent];
@@ -92,8 +93,9 @@ static void HBTweakLogTo(NSString *path, NSString *line) {
         while (lines.count > HB_LOG_MAX_LINES) [lines removeObjectAtIndex:0];
         NSString *out = [lines componentsJoinedByString:@"\n"];
         if (lines.count > 0) out = [out stringByAppendingString:@"\n"];
-        [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        ok = [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
+    return ok;
 }
 
 static void HBTweakLog(NSString *fmt, ...) {
@@ -106,9 +108,17 @@ static void HBTweakLog(NSString *fmt, ...) {
     df.dateFormat = @"HH:mm:ss.SSS";
     NSString *line = [NSString stringWithFormat:@"[%@] %@", [df stringFromDate:[NSDate date]], msg];
 
-    // 主落点：自身容器（沙盒内必定可写）
-    HBTweakLogTo(HBOwnLogPath(), line);
-    // 兜底：共享 Media 目录（仅当进程无沙盒时才成功，失败无所谓）
+    // 逐级兜底：
+    //   1) 自身容器 Documents —— 普通 App 沙盒内必定可写（微信就是这种情况）
+    //   2) /var/mobile/Documents —— 没有数据容器的守护进程（如 UGGD）落在这里
+    //   3) 共享 Media 目录 —— 仅无沙盒进程可写（SpringBoard 等）
+    BOOL ok = HBTweakLogTo(HBOwnLogPath(), line);
+    if (!ok) {
+        NSString *alt = @"/var/mobile/Documents/hb_tweak_log.txt";
+        if (![alt isEqualToString:(HBOwnLogPath() ?: @"")]) {
+            ok = HBTweakLogTo(alt, line);
+        }
+    }
     HBTweakLogTo(HB_MEDIA_TWEAKLOG, line);
 }
 
@@ -148,7 +158,11 @@ static long HBConfiguredSteps(const char **channel) {
     if ((v = HBReadPrefSteps()) > 0) { if (channel) *channel = "CFPreferences"; return v; }
     // 2) 自身容器内的文件 —— HealthBoost App 会写进来
     if ((v = HBReadFileSteps(HBOwnStepsPath())) > 0) { if (channel) *channel = "ownContainer"; return v; }
-    // 3) 共享 Media 目录（仅无沙盒进程可读）
+    // 3) /var/mobile/Documents —— 给没有数据容器的守护进程（UGGD）用
+    if ((v = HBReadFileSteps(@"/var/mobile/Documents/hb_steps.txt")) > 0) {
+        if (channel) *channel = "varMobileDocuments"; return v;
+    }
+    // 4) 共享 Media 目录（仅无沙盒进程可读）
     if ((v = HBReadFileSteps(HB_STEPS_FILE)) > 0) { if (channel) *channel = "media"; return v; }
     if (channel) *channel = "NONE";
     return -1;
@@ -339,10 +353,57 @@ static BOOL HBInstallHooksOnce(void) {
     return YES;
 }
 
+// MARK: - 注入探针（裸 POSIX 直写，独立于任何 ObjC 初始化，确保只要 dylib 被加载就必然落盘）
+
+// 只要 tweak 被加载进任意进程，立刻用裸 libc 写两个标记文件：
+//   1) /var/mobile/Media/HealthBoost/injected/<bid>.txt   —— 无沙盒进程（SpringBoard / HealthBoost App）可写
+//   2) 自身容器 Documents/hb_injected_<bid>.txt            —— 沙盒进程（微信）可写
+// 这样 App 端「注入自检」只需扫这两个位置，就能 100% 确定「dylib 到底有没有被加载」，
+// 不再依赖后面的 ObjC 日志逻辑（那套在某些崩溃场景下可能根本跑不到）。
+static void HBWriteInjectionMarker(void) {
+    char ts[32];
+    time_t t = time(NULL);
+    struct tm tm;
+    localtime_r(&t, &tm);
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
+    char pidstr[16];
+    snprintf(pidstr, sizeof(pidstr), "%d", (int)getpid());
+
+    // bundle id（尽量取，失败则用 unknown）
+    const char *bidc = "unknown";
+    @autoreleasepool {
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+        if (bid.length) bidc = [bid UTF8String];
+    }
+
+    // 1) Media 路径
+    const char *mediaDir = "/var/mobile/Media/HealthBoost/injected";
+    mkdir(mediaDir, 0755);
+    char mediaPath[768];
+    snprintf(mediaPath, sizeof(mediaPath), "%s/%s.txt", mediaDir, bidc);
+    FILE *f = fopen(mediaPath, "w");
+    if (f) { fprintf(f, "injected_at=%s pid=%s\n", ts, pidstr); fclose(f); }
+
+    // 2) 自身容器 Documents 路径
+    @autoreleasepool {
+        NSArray *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *doc = docs.firstObject;
+        if (doc.length) {
+            NSString *p = [doc stringByAppendingPathComponent:
+                           [NSString stringWithFormat:@"hb_injected_%s.txt", bidc]];
+            FILE *f2 = fopen([p UTF8String], "w");
+            if (f2) { fprintf(f2, "injected_at=%s pid=%s\n", ts, pidstr); fclose(f2); }
+        }
+    }
+}
+
 // MARK: - 构造函数
 
 __attribute__((constructor))
 static void HBHealthBoostTweakInit(void) {
+    // 第一件事：裸 POSIX 写注入标记（证明 dylib 被加载），不依赖后续任何 ObjC 逻辑
+    HBWriteInjectionMarker();
+
     @autoreleasepool {
         NSString *bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"(null)";
         NSString *exe = [[NSProcessInfo processInfo] processName] ?: @"(null)";

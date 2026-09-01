@@ -66,6 +66,8 @@ cat > staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.plist 
 		<array>
 			<string>com.tencent.xin</string>
 			<string>UGGD</string>
+			<string>com.apple.springboard</string>
+			<string>com.sykes.healthboost.app</string>
 		</array>
 	</dict>
 </dict>
@@ -100,6 +102,21 @@ else
   echo "ERROR: 签名后未检测到 healthkit，App 无法写入健康数据"
   exit 1
 fi
+
+# 给注入微信的 tweak dylib 也签上名。
+# 原因：未签名的 dylib 在开启了库校验（library validation）的进程里会被 dlopen 拒绝，
+# 表现为 tweak 静默不生效且无任何日志。签上假名可以排除这个失效模式。
+DYLIB=staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.dylib
+before=$(wc -c < "$DYLIB")
+ldid -S "$DYLIB" 2>/dev/null || echo "  警告: dylib 签名未成功（通常无影响，继续打包）"
+after=$(wc -c < "$DYLIB")
+# 签名后必须仍是合法 Mach-O（cafebabe=fat / feedface=arm64 / feedfacf=arm64e）
+magic=$(xxd -p -l4 "$DYLIB" 2>/dev/null || od -An -tx1 -N4 "$DYLIB" | tr -d ' \n')
+if [ "$magic" != "cafebabe" ] && [ "$magic" != "feedface" ] && [ "$magic" != "feedfacf" ]; then
+  echo "ERROR: dylib 签名后 Mach-O 头损坏 (magic=$magic)，终止构建"
+  exit 1
+fi
+echo "  dylib 已签名: $before -> $after bytes (magic=$magic)"
 
 echo "[5/5] 创建 control / postinst / prerm / postrm 并打包"
 # 注意：这里用 << EOF（不带引号）让 ${VER} 能被展开；

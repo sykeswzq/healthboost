@@ -127,12 +127,32 @@ static NSArray<NSString *> *HBWeChatContainerPaths(void) {
         NSString *meta = [base stringByAppendingFormat:@"/%@/.com.apple.mobile_container_manager.metadata.plist", d];
         NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:meta];
         NSString *ident = dict[@"MCMMetadataIdentifier"];
-        if ([ident isEqualToString:@"com.tencent.xin"] || [ident isEqualToString:@"UGGD"]) {
+        // 主微信、步数进程 UGGD，以及所有微信插件/扩展容器都覆盖，
+        // 避免因为猜错「到底哪个进程在读步数」而漏掉真正的目标。
+        if ([ident isEqualToString:@"com.tencent.xin"] ||
+            [ident isEqualToString:@"UGGD"] ||
+            [ident hasPrefix:@"com.tencent"]) {
             [out addObject:[base stringByAppendingPathComponent:d]];
-            HBLog(@"[HealthBoost] 找到微信容器: %@ -> %@", ident, d);
+            HBLog(@"[HealthBoost] 找到微信相关容器: %@ -> %@", ident, d);
         }
     }
     return out;
+}
+
+// 无沙盒的守护进程（比如 UGGD）可能根本没有数据容器，
+// 此时它的可写落点是 /var/mobile/Documents。这里一并写一份兜底。
+static NSInteger HBWriteStepsToVarMobileDocuments(long steps) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *doc = @"/var/mobile/Documents";
+    if (![fm fileExistsAtPath:doc]) {
+        [fm createDirectoryAtPath:doc withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+    NSString *content = [NSString stringWithFormat:@"%ld\n", steps];
+    BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
+    if (ok) [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
+    HBLog(@"[HealthBoost] 写入 /var/mobile/Documents/hb_steps.txt (ok=%d) —— 供无容器守护进程读取", ok);
+    return ok ? 1 : 0;
 }
 
 // 把步数写进微信自己的容器（沙盒内可读），这是 v78 的主通道。
@@ -163,8 +183,10 @@ static NSInteger HBWriteStepsToWeChatContainers(long steps) {
 }
 
 static void HBWriteStepsPreference(long steps) {
-    // 通道1（v78 新增，最可靠）：写进微信自己的容器，沙盒内必定可读
+    // 通道1（最可靠）：写进微信相关容器，沙盒内必定可读
     NSInteger nContainers = HBWriteStepsToWeChatContainers(steps);
+    // 通道1b：无容器守护进程（UGGD）的兜底落点
+    NSInteger nVarMobile = HBWriteStepsToVarMobileDocuments(steps);
     // 通道2：共享 Media 目录（仅对无沙盒进程有效）
     HBWriteStepsFile(steps);
     // 通道3：CFPreferences 系统域（UCStep 同款跨沙盒手法）
@@ -176,7 +198,8 @@ static void HBWriteStepsPreference(long steps) {
     BOOL ok = CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"),
                                        kCFPreferencesAnyUser,
                                        kCFPreferencesAnyHost);
-    HBLog(@"[HealthBoost] 步数通道写入完成: 容器=%ld个 Media=1 偏好sync=%d", (long)nContainers, ok);
+    HBLog(@"[HealthBoost] 步数通道写入完成: 容器=%ld个 varMobile=%ld个 Media=1 偏好sync=%d",
+          (long)nContainers, (long)nVarMobile, ok);
 }
 
 // 扫描所有数据容器，收集 tweak 写下的诊断日志。
@@ -516,6 +539,13 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     [self.view addSubview:killWCBtn];
     y += 56;
 
+    // 注入自检 按钮（v79 新增）：直接告诉我们 tweak dylib 到底有没有被加载进进程
+    UIButton *selftestBtn = [self roundedButton:@"注入自检" color:[UIColor systemPurpleColor]];
+    selftestBtn.frame = CGRectMake(margin, y, w - margin*2, 44);
+    [selftestBtn addTarget:self action:@selector(selfTestTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:selftestBtn];
+    y += 56;
+
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
     [self.view addGestureRecognizer:tap];
 
@@ -682,6 +712,84 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
             [self showAlert:@"完成" message:@"微信已强制退出。\n请重新打开微信，进入「微信运动」即可看到写入的步数。\n若仍不对，点「查看日志」把 tweak_log 部分发我。"];
         });
     }
+}
+
+- (void)selfTestTapped:(UIButton *)sender {
+    // 扫描注入标记：只要 tweak dylib 被加载进某个进程，就会留下标记文件
+    NSMutableDictionary<NSString *, NSString *> *injected = [NSMutableDictionary dictionary];
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    // 1) Media 下的无沙盒标记（SpringBoard / 本 App 等）
+    NSString *mediaDir = @"/var/mobile/Media/HealthBoost/injected";
+    for (NSString *fn in [fm contentsOfDirectoryAtPath:mediaDir error:nil] ?: @[]) {
+        if (![fn hasSuffix:@".txt"]) continue;
+        NSString *bid = [fn stringByDeletingPathExtension];
+        NSString *p = [mediaDir stringByAppendingPathComponent:fn];
+        NSString *c = [NSString stringWithContentsOfFile:p encoding:NSUTF8StringEncoding error:nil];
+        if (c.length) injected[bid] = c;
+    }
+
+    // 2) 各容器 Documents 下的沙盒标记（微信等 App Store 应用）
+    NSString *base = @"/var/mobile/Containers/Data/Application";
+    for (NSString *d in [fm contentsOfDirectoryAtPath:base error:nil] ?: @[]) {
+        NSString *docDir = [base stringByAppendingPathComponent:[d stringByAppendingPathComponent:@"Documents"]];
+        for (NSString *fn in [fm contentsOfDirectoryAtPath:docDir error:nil] ?: @[]) {
+            if (![fn hasPrefix:@"hb_injected_"] || ![fn hasSuffix:@".txt"]) continue;
+            NSString *bid = [fn substringWithRange:NSMakeRange(13, fn.length - 13 - 4)]; // 去掉 hb_injected_ 前缀和 .txt
+            NSString *c = [NSString stringWithContentsOfFile:[docDir stringByAppendingPathComponent:fn]
+                                                   encoding:NSUTF8StringEncoding error:nil];
+            if (c.length) injected[bid] = c;
+        }
+    }
+
+    // 3) 汇总
+    NSMutableArray *lines = [NSMutableArray array];
+    [lines addObject:@"【注入自检结果】"];
+    [lines addObject:[NSString stringWithFormat:@"标记的进程数: %lu", (unsigned long)injected.count]];
+    if (injected.count == 0) {
+        [lines addObject:@""];
+        [lines addObject:@"❌ 没有任何进程被注入过。"];
+        [lines addObject:@"说明：注入器（ElleKit/libhooker/roothide）根本没把"];
+        [lines addObject:@"HealthBoost.dylib 加载进任何进程。"];
+        [lines addObject:@""];
+        [lines addObject:@"排查方向："];
+        [lines addObject:@"1. 是否装了正确的 deb（1.0.x 开头那个）"];
+        [lines addObject:@"2. 重启手机后再试（注入器需随进程启动加载）"];
+        [lines addObject:@"3. roothide 用户：需在越狱 App 里对微信/本App开启 tweak 注入"];
+        [lines addObject:@"4. 确认 /var/jb/Library/MobileSubstrate/DynamicLibraries/"];
+        [lines addObject:@"   HealthBoost.dylib 与 .plist 确实存在"];
+    } else {
+        [lines addObject:@""];
+        for (NSString *bid in injected) {
+            NSString *c = injected[bid];
+            NSString *t = @"";
+            NSRange r = [c rangeOfString:@"injected_at="];
+            if (r.location != NSNotFound) {
+                t = [[c substringFromIndex:r.location + r.length]
+                     stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            }
+            NSString *who = bid;
+            if ([bid isEqualToString:@"com.tencent.xin"] || [bid isEqualToString:@"UGGD"])
+                who = [bid stringByAppendingString:@" (微信)"];
+            else if ([bid isEqualToString:@"com.sykes.healthboost.app"])
+                who = [bid stringByAppendingString:@" (本App)"];
+            else if ([bid isEqualToString:@"com.apple.springboard"])
+                who = [bid stringByAppendingString:@" (SpringBoard)"];
+            [lines addObject:[NSString stringWithFormat:@"✅ %@ @ %@", who, t]];
+        }
+        [lines addObject:@""];
+        if (injected[@"com.tencent.xin"] || injected[@"UGGD"]) {
+            [lines addObject:@"✔ 微信已被注入，tweak 在运行。若微信运动仍没变，"];
+            [lines addObject:@"看「查看日志」里的 HOOK OK / 心跳 行判断 hook 是否命中。"];
+        } else {
+            [lines addObject:@"⚠ 本App/SpringBoard 已注入，但微信没注入 ——"];
+            [lines addObject:@"微信未被越狱注入器覆盖，需在越狱App里对微信开启注入。"];
+        }
+    }
+
+    NSString *msg = [lines componentsJoinedByString:@"\n"];
+    [self updateStatus:[NSString stringWithFormat:@"注入进程数: %lu", (unsigned long)injected.count]];
+    [self showAlert:@"注入自检" message:msg];
 }
 
 - (void)viewLogTapped:(UIButton *)sender {
