@@ -69,6 +69,10 @@ cat > staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.plist 
 			<string>com.apple.springboard</string>
 			<string>com.sykes.healthboost.app</string>
 		</array>
+		<key>Executables</key>
+		<array>
+			<string>WeChat</string>
+		</array>
 	</dict>
 </dict>
 </plist>

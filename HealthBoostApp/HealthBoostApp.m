@@ -546,6 +546,14 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     [self.view addSubview:selftestBtn];
     y += 56;
 
+    // 参考配置 按钮（诊断用）：读出 UCStep 的真实 filter + 所有已装 tweak 的注入清单，
+    // 用来确认「到底哪个 Bundle/Executable 标识能命中微信」。
+    UIButton *diagBtn = [self roundedButton:@"参考配置(查UCStep)" color:[UIColor systemBrownColor]];
+    diagBtn.frame = CGRectMake(margin, y, w - margin*2, 44);
+    [diagBtn addTarget:self action:@selector(diagnoseFilterTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:diagBtn];
+    y += 56;
+
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
     [self.view addGestureRecognizer:tap];
 
@@ -790,6 +798,49 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     NSString *msg = [lines componentsJoinedByString:@"\n"];
     [self updateStatus:[NSString stringWithFormat:@"注入进程数: %lu", (unsigned long)injected.count]];
     [self showAlert:@"注入自检" message:msg];
+}
+
+// 诊断：读出 /var/roothide 与 /var/jb 下所有 tweak 的 filter 清单，
+// 重点展示 UCStep（已知能改微信步数的参考 tweak）的 Filter，
+// 借此确认「到底哪个 Bundle / Executable 标识能命中微信进程」。
+- (void)diagnoseFilterTapped:(UIButton *)sender {
+    NSMutableString *out = [NSMutableString string];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *roots = @[
+        @"/var/roothide/Library/MobileSubstrate/DynamicLibraries",
+        @"/var/jb/Library/MobileSubstrate/DynamicLibraries"
+    ];
+
+    for (NSString *root in roots) {
+        NSArray *files = [fm contentsOfDirectoryAtPath:root error:nil];
+        if (!files) continue;
+        [out appendFormat:@"\n=== %@ ===\n", root];
+        for (NSString *fn in files) {
+            if (![fn hasSuffix:@".plist"]) continue;
+            NSString *path = [root stringByAppendingPathComponent:fn];
+            NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:path];
+            if (!plist) { [out appendFormat:@"  %@  (无法读取)\n", fn]; continue; }
+            NSDictionary *filter = plist[@"Filter"];
+            if (!filter) { [out appendFormat:@"  %@  (无 Filter)\n", fn]; continue; }
+            NSArray *bundles = filter[@"Bundles"] ?: @[];
+            NSArray *exes = filter[@"Executables"] ?: @[];
+            NSString *bid = [bundles componentsJoinedByString:@", "];
+            NSString *exe = [exes componentsJoinedByString:@", "];
+            [out appendFormat:@"  %@\n    Bundles: %@\n    Executables: %@\n", fn, bid, exe];
+        }
+    }
+
+    if (out.length == 0) out = [NSMutableString stringWithString:@"(两个动态库目录都不可读，可能路径不对)"];
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已装 Tweak 注入清单"
+                                                                   message:out
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"复制" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [UIPasteboard generalPasteboard].string = out;
+        [self updateStatus:@"清单已复制"];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)viewLogTapped:(UIButton *)sender {
