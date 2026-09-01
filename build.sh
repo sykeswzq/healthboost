@@ -54,26 +54,16 @@ xcrun --sdk iphoneos clang \
 chmod 755 staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.dylib
 echo "  dylib: $(wc -c < staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.dylib) bytes"
 
-# 注入 filter：微信（UGGD 为微信可执行文件/旧版标识，两个都写上以防万一）
+# 注入 filter：V82 起改为【无 Filter = 注入所有进程】。
+# 背景：roothide 下微信真实标识未知（com.tencent.xin / UGGD / 改过的 bundle 都试过仍不命中），
+# 反复猜标识徒劳。改用 substrate 标准行为——plist 里没有 Filter 即注入所有进程，
+# 彻底绕开「按标识匹配」这一步。tweak 内部已按类名守卫（只有含 WCDeviceStepObject 的
+# 微信进程才会真正安装 hook），注入到其它进程只是写个标记+日志，安全无害。
 cat > staging/var/jb/Library/MobileSubstrate/DynamicLibraries/HealthBoost.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>Filter</key>
-	<dict>
-		<key>Bundles</key>
-		<array>
-			<string>com.tencent.xin</string>
-			<string>UGGD</string>
-			<string>com.apple.springboard</string>
-			<string>com.sykes.healthboost.app</string>
-		</array>
-		<key>Executables</key>
-		<array>
-			<string>WeChat</string>
-		</array>
-	</dict>
 </dict>
 </plist>
 EOF
