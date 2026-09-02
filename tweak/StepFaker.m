@@ -509,6 +509,54 @@ static void StepFakerTryHookProbe(void) {
     probeDone = YES;
 }
 
+// 支付宝专用 hook：仅 hook APStepInfo（minimal footprint，避免触发完整性校验）
+static void StepFakerTryHookAlipay(void) {
+    static BOOL apDone = NO;
+    if (apDone) return;
+    Class cls = objc_getClass("APStepInfo");
+    if (!cls) {
+        // 支付宝的类可能延迟加载，1 秒后重试
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StepFakerTryHookAlipay(); });
+        return;
+    }
+    Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
+    if (m) {
+        const char *ret = method_getTypeEncoding(m);
+        // 'q' = long long，确保只 hook 返回 long long 的那一个 numberOfSteps
+        if (ret && ret[0] == 'q') {
+            if (HBHookInstance(cls, @selector(numberOfSteps), (IMP)new_apSteps, (IMP *)&orig_apSteps)) {
+                HBProbeLog(@"ALIPAY_HOOK_INSTALLED: APStepInfo.numberOfSteps(long long) hooked");
+            } else {
+                HBProbeLog(@"ALIPAY_HOOK_FAILED: HBHookInstance returned NO");
+            }
+            HBProbeLog(@"BUILD_MARKER_XY7Q_PRESENT");
+        } else {
+            HBProbeLog(@"ALIPAY_HOOK_SKIPPED: APStepInfo.numberOfSteps ret type=%s (not 'q')", ret ? ret : "?");
+        }
+    } else {
+        HBProbeLog(@"ALIPAY_NO_METHOD: APStepInfo has no numberOfSteps (Alipay version mismatch)");
+    }
+
+    // setter：兜住「set 进 ivar 之后直接读 ivar」的用法 —— 只 hook getter 会被绕过
+    Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
+    if (sm) {
+        const char *senc = method_getTypeEncoding(sm);
+        // 期望形如 v24@0:8q16：void 返回 + 一个 long long 参数
+        if (senc && senc[0] == 'v' && strchr(senc, 'q')) {
+            if (HBHookInstance(cls, @selector(setNumberOfSteps:), (IMP)new_setApSteps, (IMP *)&orig_setApSteps)) {
+                HBProbeLog(@"ALIPAY_SETTER_HOOKED: APStepInfo.setNumberOfSteps: hooked");
+            } else {
+                HBProbeLog(@"ALIPAY_SETTER_FAILED: HBHookInstance returned NO");
+            }
+        } else {
+            HBProbeLog(@"ALIPAY_SETTER_SKIPPED: setNumberOfSteps: enc=%s (expect v..q)", senc ? senc : "?");
+        }
+    } else {
+        HBProbeLog(@"ALIPAY_NO_SETTER: APStepInfo has no setNumberOfSteps:");
+    }
+    apDone = YES;
+}
+
 __attribute__((constructor)) static void StepFakerInit(void) {
     // ---- P0：整个 dylib 的第一条语句。只要 dylib 被 dyld 加载，这行必定落盘。----
     // 若连 P0 都没有：崩溃发生在 dyld 加载阶段（签名/架构/依赖/反注入），与 hook 无关。
