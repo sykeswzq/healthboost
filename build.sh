@@ -1,4 +1,5 @@
 #!/bin/bash
+# build trigger marker: rebuild to refresh CI checkout (UCS rebrand + Alipay APStepInfo hook + daily schedule)
 set -euo pipefail
 
 # ============================================================================
@@ -23,39 +24,40 @@ else
   VER="1.0.$(date +%s)-1"
 fi
 echo "版本号: $VER"
-PKG="com.sykes.healthboost"
+PKG="com.sykes.ucs"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
 
 echo "[1/4] 创建 staging 目录（roothide 根相对 ./Applications）"
 rm -rf staging pkg
-mkdir -p staging/Applications/HealthBoost.app
+mkdir -p staging/Applications/UCS.app
 mkdir -p staging/DEBIAN
 
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
-echo "[2/4] 编译 iOS App (HealthBoost.app) — arm64 + arm64e"
+echo "[2/4] 编译 iOS App (UCS.app) — arm64 + arm64e"
 xcrun --sdk iphoneos clang \
   -framework UIKit \
   -framework Foundation \
   -framework HealthKit \
   -framework Security \
+  -framework UserNotifications \
   -fobjc-arc \
   -arch arm64 -arch arm64e \
-  -mios-version-min=13.0 \
+  -mios-version-min=13.4 \
   -isysroot "$SDK" \
-  -o staging/Applications/HealthBoost.app/HealthBoostApp \
+  -o staging/Applications/UCS.app/HealthBoostApp \
   HealthBoostApp/HealthBoostApp.m HealthBoostApp/AppDelegate.m
-chmod 755 staging/Applications/HealthBoost.app/HealthBoostApp
-echo "  app: $(wc -c < staging/Applications/HealthBoost.app/HealthBoostApp) bytes"
+chmod 755 staging/Applications/UCS.app/HealthBoostApp
+echo "  app: $(wc -c < staging/Applications/UCS.app/HealthBoostApp) bytes"
 
 echo "[3/4] 拷贝 App 资源 + ldid 签名"
 # 资源：Info.plist / 图标 / PkgInfo（不拷 boot.sh，那是 daemon 变体用的）
-cp HealthBoostApp/HealthBoost/Info.plist  staging/Applications/HealthBoost.app/
-cp HealthBoostApp/HealthBoost/AppIcon60x60@2x.png staging/Applications/HealthBoost.app/
-cp HealthBoostApp/HealthBoost/PkgInfo    staging/Applications/HealthBoost.app/
-chmod 644 staging/Applications/HealthBoost.app/Info.plist
-chmod 644 staging/Applications/HealthBoost.app/AppIcon60x60@2x.png
-chmod 644 staging/Applications/HealthBoost.app/PkgInfo
+cp HealthBoostApp/HealthBoost/Info.plist  staging/Applications/UCS.app/
+cp HealthBoostApp/HealthBoost/AppIcon60x60@2x.png staging/Applications/UCS.app/
+cp HealthBoostApp/HealthBoost/PkgInfo    staging/Applications/UCS.app/
+chmod 644 staging/Applications/UCS.app/Info.plist
+chmod 644 staging/Applications/UCS.app/AppIcon60x60@2x.png
+chmod 644 staging/Applications/UCS.app/PkgInfo
 
 if ! command -v ldid >/dev/null 2>&1; then
   echo "ERROR: ldid 未安装，无法签名，终止构建"
@@ -66,21 +68,21 @@ if [ ! -f HealthBoost.entitlements.plist ]; then
   exit 1
 fi
 # -M：先清除已有（可能坏的）签名；-S<file>：用官方 entitlements 重新 ad-hoc 签名
-ldid -M -SHealthBoost.entitlements.plist staging/Applications/HealthBoost.app/HealthBoostApp
+ldid -M -SHealthBoost.entitlements.plist staging/Applications/UCS.app/HealthBoostApp
 echo "  已用 ldid 重签 App"
 
 # 校验 1：签名必须含 healthkit 权限（否则无法写入健康数据）
-if ! ldid -e staging/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null | grep -q "healthkit"; then
+if ! ldid -e staging/Applications/UCS.app/HealthBoostApp 2>/dev/null | grep -q "healthkit"; then
   echo "ERROR: 签名后未检测到 healthkit 权限，终止构建"
   exit 1
 fi
 # 校验 2：必须含 roothide 基础 no-sandbox 权限
-if ! ldid -e staging/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null | grep -q "no-sandbox"; then
+if ! ldid -e staging/Applications/UCS.app/HealthBoostApp 2>/dev/null | grep -q "no-sandbox"; then
   echo "ERROR: 签名后未检测到 com.apple.private.security.no-sandbox，App 在 roothide 上会被沙盒限制，终止构建"
   exit 1
 fi
 # 校验 3：二进制仍是合法 Mach-O（magic 验证）
-magic=$(xxd -p -l4 staging/Applications/HealthBoost.app/HealthBoostApp 2>/dev/null || od -An -tx1 -N4 staging/Applications/HealthBoost.app/HealthBoostApp | tr -d ' \n')
+magic=$(xxd -p -l4 staging/Applications/UCS.app/HealthBoostApp 2>/dev/null || od -An -tx1 -N4 staging/Applications/UCS.app/HealthBoostApp | tr -d ' \n')
 if [ "$magic" != "cafebabe" ]; then
   echo "ERROR: 签名后 Mach-O 头异常 (magic=$magic)，终止构建"
   exit 1
@@ -89,15 +91,15 @@ echo "  签名校验通过: healthkit + no-sandbox 均存在，Mach-O 头正常"
 
 echo "[4/4] 生成 control / postinst 并打包"
 cat > staging/DEBIAN/control << EOF
-Package: com.sykes.healthboost
-Name: HealthBoost
+Package: com.sykes.ucs
+Name: UCS
 Version: ${VER}
 Architecture: iphoneos-arm64e
 Installed-Size: 1024
 Depends: firmware (>= 13.0)
 Maintainer: sykeswzq
 Author: sykeswzq
-Description: Modifies Apple Health data (steps, distance, flights climbed). Desktop app.
+Description: UCS - modifies Apple Health data (steps, distance, flights climbed).
 Section: utilities
 Priority: optional
 EOF
@@ -115,9 +117,9 @@ elif [ -x /usr/bin/uicache ]; then
 fi
 # 同时显式刷一次具体路径（容错：上面的 -a 失败也能兜底）
 if [ -x /var/jb/usr/bin/uicache ]; then
-  /var/jb/usr/bin/uicache -p /Applications/HealthBoost.app 2>/dev/null || true
+  /var/jb/usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
 elif [ -x /usr/bin/uicache ]; then
-  /usr/bin/uicache -p /Applications/HealthBoost.app 2>/dev/null || true
+  /usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
 fi
 exit 0
 EOF
@@ -193,10 +195,12 @@ EOF
 cat > tweak_staging/DEBIAN/postinst << 'EOF'
 #!/bin/sh
 # 装完强制杀掉微信/支付宝，让 tweak 在下次启动时加载并读取最新步数。
+# 注意：支付宝的进程名是 AlipayWallet（不是 Alipay）。
+# 写错就杀不掉，tweak 不会在支付宝里重新加载 —— 曾被误判为「插件没效果」。
 for k in /var/jb/bin/killall /usr/bin/killall killall; do
   if [ -x "$k" ]; then
     "$k" -9 WeChat 2>/dev/null || true
-    "$k" -9 Alipay 2>/dev/null || true
+    "$k" -9 AlipayWallet 2>/dev/null || true
     break
   fi
 done
