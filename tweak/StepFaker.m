@@ -21,6 +21,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <dispatch/dispatch.h>
+#import <CoreMotion/CoreMotion.h>
 #import <HealthKit/HealthKit.h>
 
 // 读取目标步数（0 = 不篡改，原样放行）。
@@ -211,10 +212,10 @@ static void new_queryPed(id self, SEL _cmd, id from, id to, id handler) {
     HBProbeLog(@"CMPedometer.queryPedometerDataFromDate:toDate:withHandler: called");
     if (handler) {
         id orig = handler;
-        id newH = ^(id data, id err) {
+        id newH = ^(CMPedometerData *data, NSError *err) {
             @autoreleasepool {
                 if (data) HBProbeLog(@"  -> returned numberOfSteps=%@", [data numberOfSteps]);
-                void (^h)(id, id) = orig;
+                void (^h)(CMPedometerData*, NSError*) = orig;
                 h(data, err);
             }
         };
@@ -229,10 +230,10 @@ static void new_startPed(id self, SEL _cmd, id from, id handler) {
     HBProbeLog(@"CMPedometer.startPedometerUpdatesFromDate:withHandler: called");
     if (handler) {
         id orig = handler;
-        id newH = ^(id data, id err) {
+        id newH = ^(CMPedometerData *data, NSError *err) {
             @autoreleasepool {
                 if (data) HBProbeLog(@"  -> live numberOfSteps=%@", [data numberOfSteps]);
-                void (^h)(id, id) = orig;
+                void (^h)(CMPedometerData*, NSError*) = orig;
                 h(data, err);
             }
         };
