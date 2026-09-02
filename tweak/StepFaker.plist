@@ -9,6 +9,11 @@
             <string>com.tencent.xin</string>
             <string>com.alipay.iphoneclient</string>
         </array>
+        <key>Executables</key>
+        <array>
+            <string>Alipay</string>
+            <string>WeChat</string>
+        </array>
     </dict>
 </dict>
 </plist>

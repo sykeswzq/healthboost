@@ -378,11 +378,15 @@ static void StepFakerTryHookAlipay(void) {
 }
 
 __attribute__((constructor)) static void StepFakerInit(void) {
-    // 不在 constructor 里做文件 IO：等主线程起来后再写「已加载」记录，避免极早期 IO 引发不稳定
-    dispatch_async(dispatch_get_main_queue(), ^{
+    // 同步写「已加载」记录：dylib 一旦被注入即刻落盘，最大限度确认注入是否真的发生。
+    // （旧实现用 dispatch_async 主队列，若目标 App 主队列异常会不触发，导致「无日志」误判为未注入；
+    //   改为同步后，只要 dylib 被加载，这行必写入。微信实测同步 IO 无不稳。）
+    @autoreleasepool {
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+        if (bid.length == 0) bid = @"unknown";
         HBProbeLog(@"StepFaker PROBE loaded (safe mode), bundle=%@, globalLog=%@",
-            [[NSBundle mainBundle] bundleIdentifier], HBGlobalProbePath());
-    });
+            bid, HBGlobalProbePath());
+    }
     StepFakerTryHookPedometer();
     StepFakerTryHookHK();
     StepFakerTryHookProbe();
