@@ -24,28 +24,72 @@ jobs:
           brew install dpkg
           brew install ldid-procursus 2>/dev/null || brew install procursus/ldid/ldid 2>/dev/null || { echo "ERROR: ldid install failed"; exit 1; }
           command -v ldid >/dev/null 2>&1 || { echo "ERROR: ldid still not available"; exit 1; }
-          ldid -e /usr/bin/true >/dev/null 2>&1 && echo "ldid OK" || echo "WARN: ldid self-test skipped"
+          (ldid -e "$(command -v true)" >/dev/null 2>&1 || ldid -h >/dev/null 2>&1) && echo "ldid OK" || echo "WARN: ldid self-test skipped (non-fatal)"
 
-      - name: Build package (daemon + app)
+      - name: Build package (app-only, roothide layout)
         run: bash build.sh
 
-      - name: Verify binary
+      - name: Verify artifact BEFORE publishing
         run: |
-          # 版本号会递增，用通配符定位，避免硬编码文件名导致找不到
+          set -e
           DEB=$(ls com.sykes.healthboost_*_iphoneos-arm64e.deb | head -1)
           echo "deb file: $DEB"
-          echo "=== control Version ==="
-          dpkg-deb -f "$DEB" Version
-          echo "=== deb contents ==="
-          dpkg-deb -c "$DEB"
-          echo "=== app executable header ==="
-          mkdir -p /tmp/hbcheck
+
+          echo "=== (1) deb 内路径必须是根相对 ./Applications/（roothide 范式）==="
+          # 用 dpkg-deb -c 列出内容；若存在 ./var/jb 或 ./var/roothide 前缀则视为错误
+          if dpkg-deb -c "$DEB" | grep -E '\./var/(jb|roothide)/' ; then
+            echo "ERROR: 检测到 ./var/jb 或 ./var/roothide 前缀路径，roothide 上 dpkg 会报 No such file"
+            exit 1
+          fi
+          if ! dpkg-deb -c "$DEB" | grep -E '\./Applications/HealthBoost\.app/HealthBoostApp' ; then
+            echo "ERROR: 未找到 ./Applications/HealthBoost.app/HealthBoostApp，打包路径错误"
+            exit 1
+          fi
+          echo "  (1) OK: 路径为根相对 ./Applications/"
+
+          echo "=== (2) 展开校验二进制签名/entitlements ==="
+          rm -rf /tmp/hbcheck && mkdir -p /tmp/hbcheck
           dpkg-deb -x "$DEB" /tmp/hbcheck
-          APPBIN=/tmp/hbcheck/var/jb/Applications/HealthBoost.app/HealthBoostApp
-          ls -la "$APPBIN"
-          echo "app header: $(head -c 4 "$APPBIN" | xxd -p)"
-          echo "=== app entitlements (确认含 no-sandbox) ==="
-          ldid -e "$APPBIN" 2>/dev/null | grep -E "no-sandbox|healthkit" || echo "WARN: no-sandbox/healthkit not found in entitlements"
+          APPBIN=/tmp/hbcheck/Applications/HealthBoost.app/HealthBoostApp
+          if [ ! -f "$APPBIN" ]; then
+            echo "ERROR: 解包后找不到 $APPBIN"
+            exit 1
+          fi
+
+          echo "  (2a) Mach-O 头必须是 fat (cafebabe)"
+          magic=$(xxd -p -l4 "$APPBIN" | tr -d '\n')
+          if [ "$magic" != "cafebabe" ]; then
+            echo "ERROR: 二进制 Mach-O 头异常 (magic=$magic)，签名/打包损坏"
+            exit 1
+          fi
+          echo "  (2a) OK: magic=$magic"
+
+          echo "  (2b) entitlements 必须含 no-sandbox 与 healthkit"
+          ENT=$(ldid -e "$APPBIN" 2>/dev/null || true)
+          if ! echo "$ENT" | grep -q "no-sandbox"; then
+            echo "ERROR: 签名缺少 com.apple.private.security.no-sandbox（roothide 必需）"
+            exit 1
+          fi
+          if ! echo "$ENT" | grep -q "healthkit"; then
+            echo "ERROR: 签名缺少 healthkit 权限（App 无法写入健康数据）"
+            exit 1
+          fi
+          echo "  (2b) OK: no-sandbox + healthkit 均存在"
+
+          echo "=== (3) Info.plist 关键字段 ==="
+          PLIST=/tmp/hbcheck/Applications/HealthBoost.app/Info.plist
+          if ! /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST" 2>/dev/null | grep -q "HealthBoostApp"; then
+            echo "ERROR: Info.plist CFBundleExecutable 不是 HealthBoostApp"
+            exit 1
+          fi
+          # 不应引用不存在的 storyboard
+          if /usr/libexec/PlistBuddy -c "Print :UIMainStoryboardFile" "$PLIST" 2>/dev/null | grep -q "Main"; then
+            echo "ERROR: Info.plist 引用了不存在的 Main.storyboard"
+            exit 1
+          fi
+          echo "  (3) OK: CFBundleExecutable=HealthBoostApp，无 storyboard 引用"
+
+          echo "=== 全部校验通过，可安全发布 ==="
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
