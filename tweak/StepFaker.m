@@ -23,6 +23,53 @@
 #import <dispatch/dispatch.h>
 #import <CoreMotion/CoreMotion.h>
 #import <HealthKit/HealthKit.h>
+#include <dlfcn.h>
+
+// ============================================================================
+// hook API：优先用 CydiaSubstrate / ElleKit 的 MSHookMessageEx
+// ----------------------------------------------------------------------------
+// 为什么必须改：arm64e（iPhone 14 Pro 的 A16）带 PAC 指针认证。objc_msgSend
+// 派发方法时会对 IMP 做 ptrauth 校验，直接把裸 C 函数指针塞给
+// method_setImplementation，签名不符就会崩 —— 表现为支付宝一注入就闪退。
+// 实测取证：搬运工源里可用的「支付宝修改步数」(StepCount.dylib) 其未定义
+// 符号里明确带 _MSHookMessageEx，而它能在 arm64e 上正常跑。
+// CI（macOS runner）没有 CydiaSubstrate 可链接，故用 dlsym 在运行时解析；
+// 设备上 Substrate/ElleKit 必然已加载，能取到；取不到再回退原生 runtime。
+// ============================================================================
+typedef void (*HBMSHookMessageExFn)(Class cls, SEL sel, IMP hook, IMP *old);
+static HBMSHookMessageExFn HBMSHook = NULL;
+
+// 统一的安全 hook 入口。成功返回 YES，并回填原实现到 origOut。
+static BOOL HBHookInstance(Class cls, SEL sel, IMP replacement, IMP *origOut) {
+    if (!cls) return NO;
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return NO;
+    if (HBMSHook) {
+        IMP old = NULL;
+        HBMSHook(cls, sel, replacement, &old);
+        if (origOut) *origOut = old;
+        return YES;
+    }
+    // 回退：原生 runtime（无 PAC 处理，仅在没有 Substrate 时兜底）
+    if (origOut) *origOut = method_getImplementation(m);
+    method_setImplementation(m, replacement);
+    return YES;
+}
+
+static BOOL HBHookClass(Class cls, SEL sel, IMP replacement, IMP *origOut) {
+    if (!cls) return NO;
+    Method m = class_getClassMethod(cls, sel);
+    if (!m) return NO;
+    if (HBMSHook) {
+        IMP old = NULL;
+        HBMSHook(cls, sel, replacement, &old);
+        if (origOut) *origOut = old;
+        return YES;
+    }
+    if (origOut) *origOut = method_getImplementation(m);
+    method_setImplementation(m, replacement);
+    return YES;
+}
 
 // 读取目标步数（0 = 不篡改，原样放行）。
 static NSInteger HBReadFakeSteps(void) {
@@ -288,17 +335,18 @@ static void StepFakerTryHookCoreMotion(void) {
         return;
     }
     if (pedCls) {
-        Method m;
-        if (orig_queryPed == NULL && (m = class_getInstanceMethod(pedCls, @selector(queryPedometerDataFromDate:toDate:withHandler:)))) {
-            orig_queryPed = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_queryPed);
+        if (orig_queryPed == NULL) {
+            HBHookInstance(pedCls, @selector(queryPedometerDataFromDate:toDate:withHandler:),
+                           (IMP)new_queryPed, (IMP *)&orig_queryPed);
         }
-        if (orig_startPed == NULL && (m = class_getInstanceMethod(pedCls, @selector(startPedometerUpdatesFromDate:withHandler:)))) {
-            orig_startPed = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_startPed);
+        if (orig_startPed == NULL) {
+            HBHookInstance(pedCls, @selector(startPedometerUpdatesFromDate:withHandler:),
+                           (IMP)new_startPed, (IMP *)&orig_startPed);
         }
     }
     if (scCls && orig_stepCnt == NULL) {
-        Method m = class_getInstanceMethod(scCls, @selector(queryStepCountStartingFrom:to:toQueue:withHandler:));
-        if (m) { orig_stepCnt = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_stepCnt); }
+        HBHookInstance(scCls, @selector(queryStepCountStartingFrom:to:toQueue:withHandler:),
+                       (IMP)new_stepCnt, (IMP *)&orig_stepCnt);
     }
     cmDone = YES;
 }
@@ -311,7 +359,9 @@ static void StepFakerTryHookPedometer(void) {
     if (!cls) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StepFakerTryHookPedometer(); }); return; }
     Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
     if (!m) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StepFakerTryHookPedometer(); }); return; }
-    if (orig_numberOfSteps == NULL) { orig_numberOfSteps = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_numberOfSteps); }
+    if (orig_numberOfSteps == NULL) {
+        HBHookInstance(cls, @selector(numberOfSteps), (IMP)new_numberOfSteps, (IMP *)&orig_numberOfSteps);
+    }
     pedDone = YES;
 }
 
@@ -322,13 +372,16 @@ static void StepFakerTryHookHK(void) {
     Class sqCls = objc_getClass("HKSampleQuery");
     if (!statCls && !sqCls) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StepFakerTryHookHK(); }); return; }
     if (statCls) {
-        Method m;
-        if (orig_sumQ == NULL && (m = class_getInstanceMethod(statCls, @selector(sumQuantity)))) { orig_sumQ = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_sumQ); }
-        if (orig_avgQ == NULL && (m = class_getInstanceMethod(statCls, @selector(averageQuantity)))) { orig_avgQ = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_avgQ); }
+        if (orig_sumQ == NULL) {
+            HBHookInstance(statCls, @selector(sumQuantity), (IMP)new_sumQ, (IMP *)&orig_sumQ);
+        }
+        if (orig_avgQ == NULL) {
+            HBHookInstance(statCls, @selector(averageQuantity), (IMP)new_avgQ, (IMP *)&orig_avgQ);
+        }
     }
     if (sqCls && orig_SQ_init == NULL) {
-        Method m = class_getInstanceMethod(sqCls, @selector(initWithSampleType:predicate:limit:sortDescriptors:resultsHandler:));
-        if (m) { orig_SQ_init = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_SQ_init); }
+        HBHookInstance(sqCls, @selector(initWithSampleType:predicate:limit:sortDescriptors:resultsHandler:),
+                       (IMP)new_SQ_init, (IMP *)&orig_SQ_init);
     }
     hkDone = YES;
 }
@@ -340,12 +393,10 @@ static void StepFakerTryHookProbe(void) {
     Class hsCls = objc_getClass("HKHealthStore");
     if (!qtCls || !hsCls) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StepFakerTryHookProbe(); }); return; }
     if (orig_QTForId == NULL) {
-        Method m = class_getClassMethod(qtCls, @selector(quantityTypeForIdentifier:));
-        if (m) { orig_QTForId = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_QTForId); }
+        HBHookClass(qtCls, @selector(quantityTypeForIdentifier:), (IMP)new_QTForId, (IMP *)&orig_QTForId);
     }
     if (orig_execQ == NULL) {
-        Method m = class_getInstanceMethod(hsCls, @selector(executeQuery:));
-        if (m) { orig_execQ = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_execQ); }
+        HBHookInstance(hsCls, @selector(executeQuery:), (IMP)new_execQ, (IMP *)&orig_execQ);
     }
     probeDone = YES;
 }
@@ -364,9 +415,11 @@ static void StepFakerTryHookAlipay(void) {
         const char *ret = method_getTypeEncoding(m);
         // 'q' = long long，确保只 hook 返回 long long 的那一个 numberOfSteps
         if (ret && ret[0] == 'q') {
-            orig_apSteps = (void*)method_getImplementation(m);
-            method_setImplementation(m, (IMP)new_apSteps);
-            HBProbeLog(@"ALIPAY_HOOK_INSTALLED: APStepInfo.numberOfSteps(long long) hooked");
+            if (HBHookInstance(cls, @selector(numberOfSteps), (IMP)new_apSteps, (IMP *)&orig_apSteps)) {
+                HBProbeLog(@"ALIPAY_HOOK_INSTALLED: APStepInfo.numberOfSteps(long long) hooked");
+            } else {
+                HBProbeLog(@"ALIPAY_HOOK_FAILED: HBHookInstance returned NO");
+            }
             HBProbeLog(@"BUILD_MARKER_XY7Q_PRESENT");
         } else {
             HBProbeLog(@"ALIPAY_HOOK_SKIPPED: APStepInfo.numberOfSteps ret type=%s (not 'q')", ret ? ret : "?");
@@ -378,14 +431,32 @@ static void StepFakerTryHookAlipay(void) {
 }
 
 __attribute__((constructor)) static void StepFakerInit(void) {
+    // 解析 Substrate / ElleKit 的 MSHookMessageEx（arm64e 上唯一安全的 hook 方式）。
+    // 注入器在加载 tweak 之前必然已经把 substrate 载入进程，RTLD_DEFAULT 一般即可取到；
+    // 取不到再按 roothide / rootless 的常见路径 dlopen 兜底。
+    HBMSHook = (HBMSHookMessageExFn)dlsym(RTLD_DEFAULT, "MSHookMessageEx");
+    if (!HBMSHook) {
+        static const char *cands[] = {
+            "/usr/lib/libsubstrate.dylib",
+            "/var/jb/usr/lib/libsubstrate.dylib",
+            "/var/jb/usr/lib/libellekit.dylib",
+            NULL
+        };
+        for (int i = 0; cands[i] && !HBMSHook; i++) {
+            void *h = dlopen(cands[i], RTLD_NOW);
+            if (h) HBMSHook = (HBMSHookMessageExFn)dlsym(h, "MSHookMessageEx");
+        }
+    }
     // 同步写「已加载」记录：dylib 一旦被注入即刻落盘，最大限度确认注入是否真的发生。
     // （旧实现用 dispatch_async 主队列，若目标 App 主队列异常会不触发，导致「无日志」误判为未注入；
     //   改为同步后，只要 dylib 被加载，这行必写入。微信实测同步 IO 无不稳。）
     @autoreleasepool {
         NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
         if (bid.length == 0) bid = @"unknown";
-        HBProbeLog(@"StepFaker PROBE loaded (safe mode), bundle=%@, globalLog=%@",
-            bid, HBGlobalProbePath());
+        HBProbeLog(@"StepFaker PROBE loaded (safe mode), bundle=%@, globalLog=%@, MSHookMessageEx=%@, exe=%@",
+            bid, HBGlobalProbePath(),
+            HBMSHook ? @"YES" : @"NO(fallback)",
+            [[[NSBundle mainBundle] executablePath] lastPathComponent] ?: @"?");
     }
     StepFakerTryHookPedometer();
     StepFakerTryHookHK();

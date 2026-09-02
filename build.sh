@@ -195,10 +195,12 @@ EOF
 cat > tweak_staging/DEBIAN/postinst << 'EOF'
 #!/bin/sh
 # 装完强制杀掉微信/支付宝，让 tweak 在下次启动时加载并读取最新步数。
+# 注意：支付宝的进程名是 AlipayWallet（不是 Alipay）。
+# 写错就杀不掉，tweak 不会在支付宝里重新加载 —— 曾被误判为「插件没效果」。
 for k in /var/jb/bin/killall /usr/bin/killall killall; do
   if [ -x "$k" ]; then
     "$k" -9 WeChat 2>/dev/null || true
-    "$k" -9 Alipay 2>/dev/null || true
+    "$k" -9 AlipayWallet 2>/dev/null || true
     break
   fi
 done

@@ -11,7 +11,7 @@
         </array>
         <key>Executables</key>
         <array>
-            <string>Alipay</string>
+            <string>AlipayWallet</string>
             <string>WeChat</string>
         </array>
     </dict>
