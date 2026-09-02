@@ -25,6 +25,13 @@
 #import <HealthKit/HealthKit.h>
 #include <dlfcn.h>
 #include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <time.h>
+#include <sys/time.h>
 
 // ============================================================================
 // hook API：优先用 CydiaSubstrate / ElleKit 的 MSHookMessageEx
@@ -109,6 +116,63 @@ static NSInteger HBReadFakeSteps(void) {
     }
 }
 
+// ============================================================================
+// 极早期原始日志 HBRawLog —— 纯 POSIX，绝不触碰 Objective-C / Foundation
+// ----------------------------------------------------------------------------
+// 为什么必须有它：constructor 是 dyld 的 initializer，运行在 App 的 main()
+// 之前。那个阶段 Foundation（NSDateFormatter / NSProcessInfo / NSFileManager /
+// NSLog）可能尚未初始化完毕，调用它们会在部分 App 里直接崩溃。
+// 之前 HBProbeLog 就是靠这些 Foundation API 写日志的，于是一旦在支付宝的
+// constructor 阶段触发，进程当场挂掉、一个字都写不出来 —— 表现为
+// 「一注入就闪退 + 完全没有任何日志」，极易被误判成「根本没注入」。
+// 这里只用 open/write/close/gettimeofday/getprogname，零 ObjC 依赖，
+// 因此能作为 dylib 的第一条语句安全执行，用来给崩溃点做「分步打点」定位。
+// ============================================================================
+static char g_rawPath[512] = {0};
+
+static void HBRawWritePath(const char *path, const char *data, size_t len) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) return;
+    write(fd, data, len);
+    close(fd);
+}
+
+static void HBRawLog(const char *fmt, ...) {
+    // 用可执行文件名（POSIX getprogname）而不是 NSBundle，避免依赖 Foundation
+    if (!g_rawPath[0]) {
+        const char *prog = getprogname();
+        if (!prog || !*prog) prog = "unknown";
+        snprintf(g_rawPath, sizeof(g_rawPath), "/var/mobile/hb_probe_%s.log", prog);
+        for (char *p = g_rawPath; *p; p++) if (*p == '.') *p = '_';
+    }
+
+    char body[1024];
+    va_list ap; va_start(ap, fmt);
+    int n = vsnprintf(body, sizeof(body), fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    if (n > (int)sizeof(body) - 1) n = (int)sizeof(body) - 1;
+
+    struct timeval tv; gettimeofday(&tv, NULL);
+    struct tm tmv; localtime_r(&tv.tv_sec, &tmv);
+    char line[1200];
+    int total = snprintf(line, sizeof(line), "[%02d:%02d:%02d.%03d %s] ",
+                         tmv.tm_hour, tmv.tm_min, tmv.tm_sec,
+                         (int)(tv.tv_usec / 1000),
+                         getprogname() ? getprogname() : "?");
+    if (total < 0 || total >= (int)sizeof(line)) total = 0;
+    int room = (int)sizeof(line) - total - 2;
+    if (n > room) n = room;
+    memcpy(line + total, body, (size_t)n);
+    total += n;
+    line[total++] = '\n';
+    line[total] = '\0';
+
+    // 写两处：按进程名那份（便于区分微信/支付宝）+ 固定名兜底（路径算不出来也能找到）
+    HBRawWritePath(g_rawPath, line, (size_t)total);
+    HBRawWritePath("/var/mobile/hb_probe_raw.log", line, (size_t)total);
+}
+
 // 全局日志路径
 static NSString *HBGlobalProbePath(void) {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
@@ -117,16 +181,25 @@ static NSString *HBGlobalProbePath(void) {
     return [NSString stringWithFormat:@"/var/mobile/hb_probe_%@.log", bid];
 }
 
-// 探测日志：写全局路径 + App Documents + NSLog
+// POSIX 时间戳（替代 NSDateFormatter：后者在 constructor 阶段可能触发 ICU/
+// 时区数据加载而崩溃，是「闪退且无日志」的元凶之一）。
+static NSString *HBTimeStamp(void) {
+    struct timeval tv; gettimeofday(&tv, NULL);
+    struct tm tmv; localtime_r(&tv.tv_sec, &tmv);
+    return [NSString stringWithFormat:@"%02d:%02d:%02d.%03d",
+            tmv.tm_hour, tmv.tm_min, tmv.tm_sec, (int)(tv.tv_usec / 1000)];
+}
+
+// 探测日志：先写纯 POSIX 日志（零 Foundation 依赖），再写全局路径 + Documents + NSLog。
+// 先写 raw 是关键：万一后面的 Foundation 调用崩溃，痕迹已经落盘，不会「零日志」。
 static void HBProbeLog(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:ap];
     va_end(ap);
+    HBRawLog("OBJC %s", [msg UTF8String] ?: "?");
 
     NSString *proc = [[NSProcessInfo processInfo] processName] ?: @"?";
-    NSDateFormatter *df = [[NSDateFormatter alloc] init];
-    [df setDateFormat:@"HH:mm:ss.SSS"];
-    NSString *ts = [df stringFromDate:[NSDate date]];
+    NSString *ts = HBTimeStamp();
     NSString *line = [NSString stringWithFormat:@"[%@ %@] %@\n", ts, proc, msg];
 
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -469,36 +542,72 @@ static void StepFakerTryHookAlipay(void) {
 }
 
 __attribute__((constructor)) static void StepFakerInit(void) {
-    // 解析 Substrate / ElleKit 的 MSHookMessageEx（arm64e 上唯一安全的 hook 方式）。
-    // 注入器在加载 tweak 之前必然已经把 substrate 载入进程，RTLD_DEFAULT 一般即可取到；
-    // 取不到再按 roothide / rootless 的常见路径 dlopen 兜底。
+    // ---- P0：整个 dylib 的第一条语句。只要 dylib 被 dyld 加载，这行必定落盘。----
+    // 若连 P0 都没有：崩溃发生在 dyld 加载阶段（签名/架构/依赖/反注入），与 hook 无关。
+    // 若 P0 有、后面的 P 缺失：崩溃就发生在最后一个已打印的 P 之后 —— 精确定位。
+    HBRawLog("P0_ENTER dylib constructor entered");
+
+    // ---- P1：安全模式开关 ----
+    // 真机上 `touch /var/mobile/hb_nohook` 后重启 App：只写日志、不装任何 hook。
+    // 用它一次性区分「崩溃来自注入本身」还是「崩溃来自某个 hook」。
+    int safeMode = (access("/var/mobile/hb_nohook", F_OK) == 0);
+    HBRawLog("P1_SAFEMODE=%d (file /var/mobile/hb_nohook %s)",
+             safeMode, safeMode ? "exists -> skip ALL hooks" : "absent");
+
+    // ---- P2：识别宿主进程（纯 POSIX，不用 NSBundle）----
+    const char *prog = getprogname();
+    int isAlipay = (prog && strstr(prog, "Alipay") != NULL);
+    HBRawLog("P2_PROG=%s isAlipay=%d", prog ? prog : "?", isAlipay);
+
+    // ---- P3：解析 Substrate / ElleKit 的 MSHookMessageEx ----
+    // arm64e 有 PAC 指针认证，只有 MSHookMessageEx 能安全替换 IMP；
+    // 裸 method_setImplementation 会在 objc_msgSend 派发时 ptrauth 校验失败而崩。
+    // 取不到就按常见的 rootless / roothide 路径 dlopen 兜底。
     HBMSHook = (HBMSHookMessageExFn)dlsym(RTLD_DEFAULT, "MSHookMessageEx");
+    HBRawLog("P3A_DLSYM_DEFAULT=%d", HBMSHook ? 1 : 0);
     if (!HBMSHook) {
         static const char *cands[] = {
-            "/usr/lib/libsubstrate.dylib",
             "/var/jb/usr/lib/libsubstrate.dylib",
             "/var/jb/usr/lib/libellekit.dylib",
+            "/usr/lib/libsubstrate.dylib",
             NULL
         };
         for (int i = 0; cands[i] && !HBMSHook; i++) {
             void *h = dlopen(cands[i], RTLD_NOW);
+            HBRawLog("P3B_DLOPEN %s -> %d", cands[i], h ? 1 : 0);
             if (h) HBMSHook = (HBMSHookMessageExFn)dlsym(h, "MSHookMessageEx");
         }
     }
-    // 同步写「已加载」记录：dylib 一旦被注入即刻落盘，最大限度确认注入是否真的发生。
-    // （旧实现用 dispatch_async 主队列，若目标 App 主队列异常会不触发，导致「无日志」误判为未注入；
-    //   改为同步后，只要 dylib 被加载，这行必写入。微信实测同步 IO 无不稳。）
-    @autoreleasepool {
-        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
-        if (bid.length == 0) bid = @"unknown";
-        HBProbeLog(@"StepFaker PROBE loaded (safe mode), bundle=%@, globalLog=%@, MSHookMessageEx=%@, exe=%@",
-            bid, HBGlobalProbePath(),
-            HBMSHook ? @"YES" : @"NO(fallback)",
-            [[[NSBundle mainBundle] executablePath] lastPathComponent] ?: @"?");
+    HBRawLog("P3_SUBSTRATE=%d", HBMSHook ? 1 : 0);
+
+    if (safeMode) {
+        HBRawLog("P9_DONE_NOHOOK safe mode: no hook installed");
+        return;
     }
+
+    // ---- P4+：安装 hook ----
+    // 支付宝走「最小侵入」：只 hook APStepInfo。
+    // 理由：CoreMotion / HealthKit 那套是给微信验证过的，但在支付宝里每多一个
+    // swizzle 就多一分触发其完整性校验的风险；先把侵入面压到最小，
+    // 确认 APStepInfo 这条路能通，再谈要不要加别的。
+    if (isAlipay) {
+        HBRawLog("P4_ALIPAY minimal footprint: hook APStepInfo only");
+        StepFakerTryHookAlipay();
+        HBRawLog("P5_ALIPAY hook done");
+        HBRawLog("P9_DONE_ALIPAY");
+        return;
+    }
+
+    // 微信等其它宿主：保持已验证稳定的全套逻辑
+    HBRawLog("P4_WECHAT before pedometer hook");
     StepFakerTryHookPedometer();
+    HBRawLog("P5_WECHAT after pedometer");
     StepFakerTryHookHK();
+    HBRawLog("P6_WECHAT after HK");
     StepFakerTryHookProbe();
+    HBRawLog("P7_WECHAT after probe");
     StepFakerTryHookCoreMotion();
+    HBRawLog("P8_WECHAT after CoreMotion");
     StepFakerTryHookAlipay();
+    HBRawLog("P9_DONE_WECHAT");
 }
