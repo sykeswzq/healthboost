@@ -109,10 +109,10 @@ static void HBWriteStepsFile(long steps) {
     HBLog(@"[HealthBoost] 已写入步数文件 %ld (file=%d) @ %@", steps, ok, path);
 }
 
-// 找到微信相关进程的数据容器路径。
-// 原理：微信是 App Store 应用，跑在沙盒里，**读不到** /var/mobile/Media/ 下的文件。
-// 但本 App 带 no-sandbox 权限，可以直接把步数文件写进微信自己的容器，
-// 微信对自己容器内的文件是必定可读的 —— 这是绕开沙盒最可靠的通道。
+// 找到微信/支付宝相关进程的数据容器路径。
+// 原理：微信、支付宝都是 App Store 应用，跑在沙盒里，**读不到** /var/mobile/Media/ 下的文件。
+// 但本 App 带 no-sandbox 权限，可以直接把步数文件写进它们自己的容器，
+// 各自进程对自己容器内的文件是必定可读的 —— 这是绕开沙盒最可靠的通道。
 // iOS 在每个数据容器根目录放 .com.apple.mobile_container_manager.metadata.plist，
 // 里面的 MCMMetadataIdentifier 就是该容器对应的 bundle id。
 static NSArray<NSString *> *HBWeChatContainerPaths(void) {
@@ -132,9 +132,10 @@ static NSArray<NSString *> *HBWeChatContainerPaths(void) {
         // 避免因为猜错「到底哪个进程在读步数」而漏掉真正的目标。
         if ([ident isEqualToString:@"com.tencent.xin"] ||
             [ident isEqualToString:@"UGGD"] ||
-            [ident hasPrefix:@"com.tencent"]) {
+            [ident hasPrefix:@"com.tencent"] ||
+            [ident isEqualToString:@"com.alipay.iphoneclient"]) {
             [out addObject:[base stringByAppendingPathComponent:d]];
-            HBLog(@"[HealthBoost] 找到微信相关容器: %@ -> %@", ident, d);
+            HBLog(@"[HealthBoost] 找到微信/支付宝相关容器: %@ -> %@", ident, d);
         }
     }
     return out;
