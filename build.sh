@@ -1,4 +1,5 @@
 #!/bin/bash
+# build trigger marker: rebuild to refresh CI checkout (UCS rebrand + Alipay APStepInfo hook + daily schedule)
 set -euo pipefail
 
 # ============================================================================
