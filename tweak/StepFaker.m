@@ -1,7 +1,7 @@
 // StepFaker —— 干净的注入式 tweak（安全探测版 1.0.136，补全 CoreMotion 入口探针）
 //
 // 设计：
-//  - 仅注入 com.tencent.xin（微信）与 com.alipay.iphoneclient（支付宝）。
+//  - 仅注入 com.tencent.xin（微信）。
 //  - 已知稳定可用的伪造逻辑（来自 1.0.131，微信已验证可用）：
 //      * 微信：CMPedometerData.numberOfSteps
 //      * 支付宝：HKStatistics sumQuantity/averageQuantity + HKSampleQuery
@@ -259,6 +259,11 @@ static id new_sumQ(id self, SEL _cmd) {
     if (HBIsStepType([self quantityType])) {
         NSInteger fake = HBReadFakeSteps();
         if (fake > 0) {
+            static BOOL sumLogged = NO;
+            if (!sumLogged) {
+                sumLogged = YES;
+                HBProbeLog(@"HKSTAT_SUM: returning fake=%ld (query type=%@)", (long)fake, NSStringFromClass([self class]));
+            }
             HKUnit *unit = [HKUnit countUnit];
             return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
         }
@@ -271,6 +276,11 @@ static id new_avgQ(id self, SEL _cmd) {
     if (HBIsStepType([self quantityType])) {
         NSInteger fake = HBReadFakeSteps();
         if (fake > 0) {
+            static BOOL avgLogged = NO;
+            if (!avgLogged) {
+                avgLogged = YES;
+                HBProbeLog(@"HKSTAT_AVG: returning fake=%ld (query type=%@)", (long)fake, NSStringFromClass([self class]));
+            }
             HKUnit *unit = [HKUnit countUnit];
             return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
         }
@@ -285,6 +295,11 @@ static id new_SQ_init(id self, SEL _cmd,
     if (HBIsStepType(type)) {
         NSInteger fake = HBReadFakeSteps();
         if (fake > 0 && handler) {
+            static BOOL sqLogged = NO;
+            if (!sqLogged) {
+                sqLogged = YES;
+                HBProbeLog(@"HKSAMPLE_QUERY: intercepting step query, returning fake=%ld", (long)fake);
+            }
             id origHandler = handler;
             id newHandler = ^(id q, id results, id error) {
                 @autoreleasepool {
@@ -494,53 +509,6 @@ static void StepFakerTryHookProbe(void) {
     probeDone = YES;
 }
 
-static void StepFakerTryHookAlipay(void) {
-    static BOOL apDone = NO;
-    if (apDone) return;
-    Class cls = objc_getClass("APStepInfo");
-    if (!cls) {
-        // 支付宝的类可能延迟加载，1 秒后重试
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StepFakerTryHookAlipay(); });
-        return;
-    }
-    Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
-    if (m) {
-        const char *ret = method_getTypeEncoding(m);
-        // 'q' = long long，确保只 hook 返回 long long 的那一个 numberOfSteps
-        if (ret && ret[0] == 'q') {
-            if (HBHookInstance(cls, @selector(numberOfSteps), (IMP)new_apSteps, (IMP *)&orig_apSteps)) {
-                HBProbeLog(@"ALIPAY_HOOK_INSTALLED: APStepInfo.numberOfSteps(long long) hooked");
-            } else {
-                HBProbeLog(@"ALIPAY_HOOK_FAILED: HBHookInstance returned NO");
-            }
-            HBProbeLog(@"BUILD_MARKER_XY7Q_PRESENT");
-        } else {
-            HBProbeLog(@"ALIPAY_HOOK_SKIPPED: APStepInfo.numberOfSteps ret type=%s (not 'q')", ret ? ret : "?");
-        }
-    } else {
-        HBProbeLog(@"ALIPAY_NO_METHOD: APStepInfo has no numberOfSteps (Alipay version mismatch)");
-    }
-
-    // setter：兜住「set 进 ivar 之后直接读 ivar」的用法 —— 只 hook getter 会被绕过
-    Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
-    if (sm) {
-        const char *senc = method_getTypeEncoding(sm);
-        // 期望形如 v24@0:8q16：void 返回 + 一个 long long 参数
-        if (senc && senc[0] == 'v' && strchr(senc, 'q')) {
-            if (HBHookInstance(cls, @selector(setNumberOfSteps:), (IMP)new_setApSteps, (IMP *)&orig_setApSteps)) {
-                HBProbeLog(@"ALIPAY_SETTER_HOOKED: APStepInfo.setNumberOfSteps: hooked");
-            } else {
-                HBProbeLog(@"ALIPAY_SETTER_FAILED: HBHookInstance returned NO");
-            }
-        } else {
-            HBProbeLog(@"ALIPAY_SETTER_SKIPPED: setNumberOfSteps: enc=%s (expect v..q)", senc ? senc : "?");
-        }
-    } else {
-        HBProbeLog(@"ALIPAY_NO_SETTER: APStepInfo has no setNumberOfSteps:");
-    }
-    apDone = YES;
-}
-
 __attribute__((constructor)) static void StepFakerInit(void) {
     // ---- P0：整个 dylib 的第一条语句。只要 dylib 被 dyld 加载，这行必定落盘。----
     // 若连 P0 都没有：崩溃发生在 dyld 加载阶段（签名/架构/依赖/反注入），与 hook 无关。
@@ -556,8 +524,8 @@ __attribute__((constructor)) static void StepFakerInit(void) {
 
     // ---- P2：识别宿主进程（纯 POSIX，不用 NSBundle）----
     const char *prog = getprogname();
-    int isAlipay = (prog && strstr(prog, "Alipay") != NULL);
-    HBRawLog("P2_PROG=%s isAlipay=%d", prog ? prog : "?", isAlipay);
+    int isAlipay = 0;
+    HBRawLog("P2_PROG=%s", prog ? prog : "?");
 
     // ---- P3：解析 Substrate / ElleKit 的 MSHookMessageEx ----
     // arm64e 有 PAC 指针认证，只有 MSHookMessageEx 能安全替换 IMP；
