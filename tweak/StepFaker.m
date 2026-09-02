@@ -1,4 +1,4 @@
-// StepFaker —— 干净的注入式 tweak（安全探测版 1.0.135）
+// StepFaker —— 干净的注入式 tweak（安全探测版 1.0.136，补全 CoreMotion 入口探针）
 //
 // 设计：
 //  - 仅注入 com.tencent.xin（微信）与 com.alipay.iphoneclient（支付宝）。
@@ -203,6 +203,88 @@ static id new_QTForId(Class self, SEL _cmd, NSString *identifier) {
     return r;
 }
 
+// ===== 探测（仅记录，不篡改）：CoreMotion 步数入口 =====
+// 微信/支付宝可能走 CoreMotion 而非 HealthKit；加这组日志型 hook，
+// 只记录调用了哪个入口 + 返回值，便于定位 支付宝 的真实路径（不猜接口）。
+static void (*orig_queryPed)(id, SEL, id, id, id) = NULL;
+static void new_queryPed(id self, SEL _cmd, id from, id to, id handler) {
+    HBProbeLog(@"CMPedometer.queryPedometerDataFromDate:toDate:withHandler: called");
+    if (handler) {
+        id orig = handler;
+        id newH = ^(CMPedometerData *data, NSError *err) {
+            @autoreleasepool {
+                if (data) HBProbeLog(@"  -> returned numberOfSteps=%@", [data numberOfSteps]);
+                void (^h)(CMPedometerData*, NSError*) = orig;
+                h(data, err);
+            }
+        };
+        orig_queryPed(self, _cmd, from, to, newH);
+        return;
+    }
+    orig_queryPed(self, _cmd, from, to, handler);
+}
+
+static void (*orig_startPed)(id, SEL, id, id) = NULL;
+static void new_startPed(id self, SEL _cmd, id from, id handler) {
+    HBProbeLog(@"CMPedometer.startPedometerUpdatesFromDate:withHandler: called");
+    if (handler) {
+        id orig = handler;
+        id newH = ^(CMPedometerData *data, NSError *err) {
+            @autoreleasepool {
+                if (data) HBProbeLog(@"  -> live numberOfSteps=%@", [data numberOfSteps]);
+                void (^h)(CMPedometerData*, NSError*) = orig;
+                h(data, err);
+            }
+        };
+        orig_startPed(self, _cmd, from, newH);
+        return;
+    }
+    orig_startPed(self, _cmd, from, handler);
+}
+
+static void (*orig_stepCnt)(id, SEL, id, id, id, id) = NULL;
+static void new_stepCnt(id self, SEL _cmd, id from, id to, id queue, id handler) {
+    HBProbeLog(@"CMStepCounter.queryStepCountStartingFrom:to:toQueue:withHandler: called");
+    if (handler) {
+        id orig = handler;
+        id newH = ^(NSInteger count, NSError *err) {
+            @autoreleasepool {
+                HBProbeLog(@"  -> returned steps=%ld", (long)count);
+                void (^h)(NSInteger, NSError*) = orig;
+                h(count, err);
+            }
+        };
+        orig_stepCnt(self, _cmd, from, to, queue, newH);
+        return;
+    }
+    orig_stepCnt(self, _cmd, from, to, queue, handler);
+}
+
+static void StepFakerTryHookCoreMotion(void) {
+    static BOOL cmDone = NO;
+    if (cmDone) return;
+    Class pedCls = objc_getClass("CMPedometer");
+    Class scCls  = objc_getClass("CMStepCounter");
+    if (!pedCls && !scCls) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StepFakerTryHookCoreMotion(); });
+        return;
+    }
+    if (pedCls) {
+        Method m;
+        if (orig_queryPed == NULL && (m = class_getInstanceMethod(pedCls, @selector(queryPedometerDataFromDate:toDate:withHandler:)))) {
+            orig_queryPed = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_queryPed);
+        }
+        if (orig_startPed == NULL && (m = class_getInstanceMethod(pedCls, @selector(startPedometerUpdatesFromDate:withHandler:)))) {
+            orig_startPed = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_startPed);
+        }
+    }
+    if (scCls && orig_stepCnt == NULL) {
+        Method m = class_getInstanceMethod(scCls, @selector(queryStepCountStartingFrom:to:toQueue:withHandler:));
+        if (m) { orig_stepCnt = (void*)method_getImplementation(m); method_setImplementation(m, (IMP)new_stepCnt); }
+    }
+    cmDone = YES;
+}
+
 // ===== hook 安装 =====
 static void StepFakerTryHookPedometer(void) {
     static BOOL pedDone = NO;
@@ -259,4 +341,5 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     StepFakerTryHookPedometer();
     StepFakerTryHookHK();
     StepFakerTryHookProbe();
+    StepFakerTryHookCoreMotion();
 }
