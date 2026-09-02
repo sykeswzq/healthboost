@@ -33,7 +33,7 @@ mkdir -p staging/DEBIAN
 
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
-echo "[2/4] 编译 iOS App (HealthBoost.app) — arm64 + arm64e"
+echo "[2/4] 编译 iOS App (UCS.app) — arm64 + arm64e"
 xcrun --sdk iphoneos clang \
   -framework UIKit \
   -framework Foundation \
@@ -47,16 +47,16 @@ xcrun --sdk iphoneos clang \
   -o staging/Applications/UCS.app/HealthBoostApp \
   HealthBoostApp/HealthBoostApp.m HealthBoostApp/AppDelegate.m
 chmod 755 staging/Applications/UCS.app/HealthBoostApp
-echo "  app: $(wc -c < staging/Applications/HealthBoost.app/HealthBoostApp) bytes"
+echo "  app: $(wc -c < staging/Applications/UCS.app/HealthBoostApp) bytes"
 
 echo "[3/4] 拷贝 App 资源 + ldid 签名"
 # 资源：Info.plist / 图标 / PkgInfo（不拷 boot.sh，那是 daemon 变体用的）
 cp HealthBoostApp/HealthBoost/Info.plist  staging/Applications/UCS.app/
 cp HealthBoostApp/HealthBoost/AppIcon60x60@2x.png staging/Applications/UCS.app/
 cp HealthBoostApp/HealthBoost/PkgInfo    staging/Applications/UCS.app/
-chmod 644 staging/Applications/HealthBoost.app/Info.plist
-chmod 644 staging/Applications/HealthBoost.app/AppIcon60x60@2x.png
-chmod 644 staging/Applications/HealthBoost.app/PkgInfo
+chmod 644 staging/Applications/UCS.app/Info.plist
+chmod 644 staging/Applications/UCS.app/AppIcon60x60@2x.png
+chmod 644 staging/Applications/UCS.app/PkgInfo
 
 if ! command -v ldid >/dev/null 2>&1; then
   echo "ERROR: ldid 未安装，无法签名，终止构建"
