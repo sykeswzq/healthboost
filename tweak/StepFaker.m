@@ -107,11 +107,11 @@ static void HBProbeLog(NSString *fmt, ...) {
 
 static NSString *HBQueryTypeIdentifier(id query) {
     if ([query respondsToSelector:@selector(quantityType)]) {
-        id t = [query quantityType];
+        HKObjectType *t = [query quantityType];
         if ([t respondsToSelector:@selector(identifier)]) return [t identifier];
     }
     if ([query respondsToSelector:@selector(sampleType)]) {
-        id t = [query sampleType];
+        HKObjectType *t = [query sampleType];
         if ([t respondsToSelector:@selector(identifier)]) return [t identifier];
     }
     return nil;
@@ -119,7 +119,8 @@ static NSString *HBQueryTypeIdentifier(id query) {
 
 static BOOL HBIsStepType(id type) {
     if (!type) return NO;
-    NSString *tid = [type respondsToSelector:@selector(identifier)] ? [type identifier] : nil;
+    HKObjectType *t = type;
+    NSString *tid = [t respondsToSelector:@selector(identifier)] ? [t identifier] : nil;
     return [tid isEqualToString:@"HKQuantityTypeIdentifierStepCount"];
 }
 
