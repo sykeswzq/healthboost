@@ -24,6 +24,7 @@
 #import <CoreMotion/CoreMotion.h>
 #import <HealthKit/HealthKit.h>
 #include <dlfcn.h>
+#include <string.h>
 
 // ============================================================================
 // hook API：优先用 CydiaSubstrate / ElleKit 的 MSHookMessageEx
@@ -248,6 +249,25 @@ static long long new_apSteps(id self, SEL _cmd) {
     return orig_apSteps ? orig_apSteps(self, _cmd) : 0;
 }
 
+// 路径四之 setter：APStepInfo.setNumberOfSteps:(long long)
+// 为什么要连 setter 一起 hook：支付宝可能是「先算出步数 → setNumberOfSteps: 存进 ivar →
+// 之后直接读 ivar」的用法。那种情况下只 hook getter 会被彻底绕过，步数纹丝不动。
+// 现成的「支付宝修改步数」(StepCount.dylib) 就是 getter + setter 一起 hook 的。
+// 两边都兜住，无论它走 getter 还是读 ivar，拿到的都是假值。
+static void (*orig_setApSteps)(id, SEL, long long) = NULL;
+static void new_setApSteps(id self, SEL _cmd, long long steps) {
+    NSInteger fake = HBReadFakeSteps();
+    if (fake > 0) {
+        static BOOL apSetLogged = NO;
+        if (!apSetLogged) {
+            apSetLogged = YES;
+            HBProbeLog(@"ALIPAY_SET_FAKED: setNumberOfSteps: %lld -> %ld", steps, (long)fake);
+        }
+        steps = (long long)fake;   // 连写入的值一起改掉，覆盖直接读 ivar 的路径
+    }
+    if (orig_setApSteps) orig_setApSteps(self, _cmd, steps);
+}
+
 // ===== 探测（仅记录，不篡改）：唯一总入口 + 类型工厂 =====
 static void (*orig_execQ)(id, SEL, id) = NULL;
 static void new_execQ(id self, SEL _cmd, id query) {
@@ -426,6 +446,24 @@ static void StepFakerTryHookAlipay(void) {
         }
     } else {
         HBProbeLog(@"ALIPAY_NO_METHOD: APStepInfo has no numberOfSteps (Alipay version mismatch)");
+    }
+
+    // setter：兜住「set 进 ivar 之后直接读 ivar」的用法 —— 只 hook getter 会被绕过
+    Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
+    if (sm) {
+        const char *senc = method_getTypeEncoding(sm);
+        // 期望形如 v24@0:8q16：void 返回 + 一个 long long 参数
+        if (senc && senc[0] == 'v' && strchr(senc, 'q')) {
+            if (HBHookInstance(cls, @selector(setNumberOfSteps:), (IMP)new_setApSteps, (IMP *)&orig_setApSteps)) {
+                HBProbeLog(@"ALIPAY_SETTER_HOOKED: APStepInfo.setNumberOfSteps: hooked");
+            } else {
+                HBProbeLog(@"ALIPAY_SETTER_FAILED: HBHookInstance returned NO");
+            }
+        } else {
+            HBProbeLog(@"ALIPAY_SETTER_SKIPPED: setNumberOfSteps: enc=%s (expect v..q)", senc ? senc : "?");
+        }
+    } else {
+        HBProbeLog(@"ALIPAY_NO_SETTER: APStepInfo has no setNumberOfSteps:");
     }
     apDone = YES;
 }
