@@ -366,6 +366,7 @@ static void StepFakerTryHookAlipay(void) {
         if (ret && ret[0] == 'q') {
             orig_apSteps = (void*)method_getImplementation(m);
             method_setImplementation(m, (IMP)new_apSteps);
+            HBProbeLog(@"BUILD_MARKER_XY7Q_PRESENT");
             HBProbeLog(@"HOOKED APStepInfo.numberOfSteps (支付宝步数入口, 返回 long long)");
         } else {
             HBProbeLog(@"APStepInfo.numberOfSteps 返回类型非 long long (%s)，跳过", ret ? ret : "?");
