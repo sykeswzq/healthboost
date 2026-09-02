@@ -185,6 +185,15 @@ static id new_SQ_init(id self, SEL _cmd,
     return orig_SQ_init(self, _cmd, type, pred, limit, sorts, handler);
 }
 
+// 路径四：支付宝 APStepInfo.numberOfSteps（long long）—— Flex 社区公认目标，支付宝运动步数走这里
+// 与微信的 CMPedometerData 不同，支付宝用自己的内部类承载步数显示值。
+static long long (*orig_apSteps)(id, SEL) = NULL;
+static long long new_apSteps(id self, SEL _cmd) {
+    NSInteger fake = HBReadFakeSteps();
+    if (fake > 0) return (long long)fake;
+    return orig_apSteps ? orig_apSteps(self, _cmd) : 0;
+}
+
 // ===== 探测（仅记录，不篡改）：唯一总入口 + 类型工厂 =====
 static void (*orig_execQ)(id, SEL, id) = NULL;
 static void new_execQ(id self, SEL _cmd, id query) {
@@ -334,6 +343,32 @@ static void StepFakerTryHookProbe(void) {
     probeDone = YES;
 }
 
+static void StepFakerTryHookAlipay(void) {
+    static BOOL apDone = NO;
+    if (apDone) return;
+    Class cls = objc_getClass("APStepInfo");
+    if (!cls) {
+        // 支付宝的类可能延迟加载，1 秒后重试
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StepFakerTryHookAlipay(); });
+        return;
+    }
+    Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
+    if (m) {
+        const char *ret = method_getTypeEncoding(m);
+        // 'q' = long long，确保只 hook 返回 long long 的那一个 numberOfSteps
+        if (ret && ret[0] == 'q') {
+            orig_apSteps = (void*)method_getImplementation(m);
+            method_setImplementation(m, (IMP)new_apSteps);
+            HBProbeLog(@"HOOKED APStepInfo.numberOfSteps (支付宝步数入口, 返回 long long)");
+        } else {
+            HBProbeLog(@"APStepInfo.numberOfSteps 返回类型非 long long (%s)，跳过", ret ? ret : "?");
+        }
+    } else {
+        HBProbeLog(@"APStepInfo 不含 numberOfSteps（可能支付宝版本不符）");
+    }
+    apDone = YES;
+}
+
 __attribute__((constructor)) static void StepFakerInit(void) {
     // 不在 constructor 里做文件 IO：等主线程起来后再写「已加载」记录，避免极早期 IO 引发不稳定
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -344,4 +379,5 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     StepFakerTryHookHK();
     StepFakerTryHookProbe();
     StepFakerTryHookCoreMotion();
+    StepFakerTryHookAlipay();
 }

@@ -19,13 +19,13 @@
         </dict>
     </dict>
     <key>CFBundleIdentifier</key>
-    <string>com.sykes.healthboost.app</string>
+    <string>com.sykes.ucs.app</string>
     <key>CFBundleDisplayName</key>
-    <string>HealthBoost</string>
+    <string>UCS</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>HealthBoost</string>
+    <string>UCS</string>
     <key>CFBundleSupportedPlatforms</key>
     <array>
         <string>iPhoneOS</string>
