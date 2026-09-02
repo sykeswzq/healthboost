@@ -42,7 +42,7 @@ xcrun --sdk iphoneos clang \
   -framework UserNotifications \
   -fobjc-arc \
   -arch arm64 -arch arm64e \
-  -mios-version-min=13.0 \
+  -mios-version-min=13.4 \
   -isysroot "$SDK" \
   -o staging/Applications/UCS.app/HealthBoostApp \
   HealthBoostApp/HealthBoostApp.m HealthBoostApp/AppDelegate.m

@@ -553,13 +553,13 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     self.scheduleOn = sender.isOn;
     [self saveSettings];
     if (self.scheduleOn) [self scheduleDailyNotification];
-    else [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifier:@"UCSDailyGen"];
+    else [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifiers:@[@"UCSDailyGen"]];
     [self updateStatus:self.scheduleOn ? [NSString stringWithFormat:@"已开启每日 %02ld:%02ld 定时生成", (long)self.schedHour, (long)self.schedMinute] : @"已关闭定时"];
 }
 
 - (void)scheduleDailyNotification {
     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
-    [c removePendingNotificationRequestsWithIdentifier:@"UCSDailyGen"];
+    [c removePendingNotificationRequestsWithIdentifiers:@[@"UCSDailyGen"]];
     if (!self.scheduleOn) return;
     UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
     content.title = @"UCS";
