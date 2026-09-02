@@ -194,7 +194,7 @@ static long long new_apSteps(id self, SEL _cmd) {
         static BOOL apLogged = NO;
         if (!apLogged) {
             apLogged = YES;
-            HBProbeLog(@"APStepInfo.numberOfSteps 被调用，返回 fake=%ld（支付宝步数伪造已生效）", (long)fake);
+            HBProbeLog(@"ALIPAY_FAKE_RETURNED: APStepInfo.numberOfSteps returning fake=%ld", (long)fake);
         }
         return (long long)fake;
     }
@@ -366,13 +366,13 @@ static void StepFakerTryHookAlipay(void) {
         if (ret && ret[0] == 'q') {
             orig_apSteps = (void*)method_getImplementation(m);
             method_setImplementation(m, (IMP)new_apSteps);
+            HBProbeLog(@"ALIPAY_HOOK_INSTALLED: APStepInfo.numberOfSteps(long long) hooked");
             HBProbeLog(@"BUILD_MARKER_XY7Q_PRESENT");
-            HBProbeLog(@"HOOKED APStepInfo.numberOfSteps (支付宝步数入口, 返回 long long)");
         } else {
-            HBProbeLog(@"APStepInfo.numberOfSteps 返回类型非 long long (%s)，跳过", ret ? ret : "?");
+            HBProbeLog(@"ALIPAY_HOOK_SKIPPED: APStepInfo.numberOfSteps ret type=%s (not 'q')", ret ? ret : "?");
         }
     } else {
-        HBProbeLog(@"APStepInfo 不含 numberOfSteps（可能支付宝版本不符）");
+        HBProbeLog(@"ALIPAY_NO_METHOD: APStepInfo has no numberOfSteps (Alipay version mismatch)");
     }
     apDone = YES;
 }
