@@ -25,6 +25,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <dispatch/dispatch.h>
+#import <HealthKit/HealthKit.h>
 
 // 读取目标步数（0 = 不篡改，原样放行）。
 // 双通道冗余：先读自己容器 Documents/hb_steps.txt，再读 CFPreferences 系统域。
@@ -89,8 +90,8 @@ static id new_sumQ(id self, SEL _cmd) {
     if (type && [[type identifier] isEqualToString:@"HKQuantityTypeIdentifierStepCount"]) {
         NSInteger fake = HBReadFakeSteps();
         if (fake > 0) {
-            id unit = [objc_getClass("HKUnit") countUnit];
-            return [objc_getClass("HKQuantity") quantityWithUnit:unit doubleValue:(double)fake];
+            HKUnit *unit = [HKUnit countUnit];
+            return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
         }
     }
     return orig_sumQ(self, _cmd);
@@ -102,8 +103,8 @@ static id new_avgQ(id self, SEL _cmd) {
     if (type && [[type identifier] isEqualToString:@"HKQuantityTypeIdentifierStepCount"]) {
         NSInteger fake = HBReadFakeSteps();
         if (fake > 0) {
-            id unit = [objc_getClass("HKUnit") countUnit];
-            return [objc_getClass("HKQuantity") quantityWithUnit:unit doubleValue:(double)fake];
+            HKUnit *unit = [HKUnit countUnit];
+            return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
         }
     }
     return orig_avgQ(self, _cmd);
@@ -122,13 +123,13 @@ static id new_SQ_init(id self, SEL _cmd,
             id origHandler = handler;
             id newHandler = ^(id q, id results, id error) {
                 @autoreleasepool {
-                    id unit = [objc_getClass("HKUnit") countUnit];
-                    id qty = [objc_getClass("HKQuantity") quantityWithUnit:unit doubleValue:(double)fake];
-                    id sample = [objc_getClass("HKQuantitySample")
+                    HKUnit *unit = [HKUnit countUnit];
+                    HKQuantity *qty = [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
+                    HKQuantitySample *sample = [HKQuantitySample
                         quantitySampleWithType:type
-                                       quantity:qty
-                                      startDate:[NSDate dateWithTimeIntervalSince1970:0]
-                                        endDate:[NSDate date]];
+                                      quantity:qty
+                                     startDate:[NSDate dateWithTimeIntervalSince1970:0]
+                                       endDate:[NSDate date]];
                     NSArray *newResults = @[ sample ];
                     void (^h)(id, id, id) = origHandler;
                     h(q, newResults, error);
