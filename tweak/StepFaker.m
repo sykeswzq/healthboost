@@ -262,7 +262,7 @@ static id new_sumQ(id self, SEL _cmd) {
             static BOOL sumLogged = NO;
             if (!sumLogged) {
                 sumLogged = YES;
-                HBProbeLog(@"HKSTAT_SUM: returning fake=%ld (query type=%@)", (long)fake, NSStringFromClass([self class]));
+                HBProbeLog(@"HKSTAT_SUM: returning fake=%ld", (long)fake);
             }
             HKUnit *unit = [HKUnit countUnit];
             return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
@@ -279,7 +279,7 @@ static id new_avgQ(id self, SEL _cmd) {
             static BOOL avgLogged = NO;
             if (!avgLogged) {
                 avgLogged = YES;
-                HBProbeLog(@"HKSTAT_AVG: returning fake=%ld (query type=%@)", (long)fake, NSStringFromClass([self class]));
+                HBProbeLog(@"HKSTAT_AVG: returning fake=%ld", (long)fake);
             }
             HKUnit *unit = [HKUnit countUnit];
             return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
