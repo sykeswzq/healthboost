@@ -56,7 +56,9 @@ static NSInteger HBReadFakeSteps(void) {
             if (CFGetTypeID(val) == CFNumberGetTypeID()) {
                 CFNumberGetValue((CFNumberRef)val, kCFNumberNSIntegerType, &v);
             } else if (CFGetTypeID(val) == CFStringGetTypeID()) {
-                v = [(NSString *)val integerValue];
+                // 非持有桥接：仅读取，不转移所有权；下方统一 CFRelease 平衡 Copy 的 +1
+                NSString *s = (__bridge NSString *)val;
+                v = [s integerValue];
             }
             CFRelease(val);
             if (v > 0) return v;
@@ -81,13 +83,13 @@ static void StepFakerTryHook(void) {
     Class cls = objc_getClass("CMPedometerData");
     if (!cls) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), StepFakerTryHook);
+                       dispatch_get_main_queue(), ^{ StepFakerTryHook(); });
         return;
     }
     Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
     if (!m) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), StepFakerTryHook);
+                       dispatch_get_main_queue(), ^{ StepFakerTryHook(); });
         return;
     }
     if (orig_numberOfSteps == NULL) {
