@@ -126,4 +126,84 @@ chmod 755 staging/DEBIAN/postinst
 
 dpkg-deb -b -Zgzip staging "$OUT"
 echo "  -> $(ls -lh "$OUT" | awk '{print $5}') bytes"
-echo "DONE: $OUT"
+echo "DONE(APP): $OUT"
+
+# ============================================================================
+# 第二部分：构建「干净注入 tweak」StepFaker（与 App-only deb 分开打包）
+# ----------------------------------------------------------------------------
+# 只注入 com.tencent.xin（微信）/ com.alipay.iphoneclient（支付宝），
+# hook CMPedometerData.numberOfSteps 返回假步数。
+# 目标步数由 HealthBoost App 写入微信/支付宝容器 Documents/hb_steps.txt
+# 或 CFPreferences 系统域，tweak 在进程内读取。为 0 时原样放行。
+# 路径使用 roothide 根相对 ./Library/MobileSubstrate/DynamicLibraries/。
+# ============================================================================
+
+STEP_VER="1.0.${GITHUB_RUN_NUMBER:-$(date +%s)}-1"
+STEP_PKG="com.sykes.stepfaker"
+STEP_OUT="${STEP_PKG}_${STEP_VER}_iphoneos-arm64e.deb"
+
+echo "[5/5] 编译 StepFaker tweak dylib (arm64 + arm64e)"
+rm -rf tweak_staging
+mkdir -p tweak_staging/Library/MobileSubstrate/DynamicLibraries
+xcrun --sdk iphoneos clang \
+  -dynamiclib -fobjc-arc \
+  -framework Foundation -framework CoreFoundation -framework CoreMotion \
+  -arch arm64 -arch arm64e \
+  -mios-version-min=13.0 \
+  -isysroot "$SDK" \
+  -o tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib \
+  tweak/StepFaker.m
+chmod 755 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
+echo "  tweak dylib: $(wc -c < tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib) bytes"
+
+echo "  拷贝 filter plist"
+cp tweak/StepFaker.plist tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
+chmod 644 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
+
+if command -v ldid >/dev/null 2>&1; then
+  ldid -M -S tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
+  echo "  已用 ldid 签名 tweak dylib"
+else
+  echo "WARN: ldid 不可用，tweak dylib 未签名（roothide 下可能加载失败）"
+fi
+
+# 校验 dylib 仍是合法 Mach-O（胖二进制 magic=cafebabe）
+smagic=$(xxd -p -l4 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib 2>/dev/null || od -An -tx1 -N4 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib | tr -d ' \n')
+if [ "$smagic" != "cafebabe" ]; then
+  echo "ERROR: tweak dylib Mach-O 头异常 (magic=$smagic)，终止构建"
+  exit 1
+fi
+echo "  tweak 签名校验通过: Mach-O 头正常"
+
+mkdir -p tweak_staging/DEBIAN
+cat > tweak_staging/DEBIAN/control << EOF
+Package: ${STEP_PKG}
+Name: StepFaker (HealthBoost WeChat/Alipay step faker)
+Version: ${STEP_VER}
+Architecture: iphoneos-arm64e
+Installed-Size: 128
+Depends: firmware (>= 13.0)
+Maintainer: sykeswzq
+Author: sykeswzq
+Description: Injects only WeChat/Alipay and fakes CMPedometer step count.
+Section: tweaks
+Priority: optional
+EOF
+
+cat > tweak_staging/DEBIAN/postinst << 'EOF'
+#!/bin/sh
+# 装完强制杀掉微信/支付宝，让 tweak 在下次启动时加载并读取最新步数。
+for k in /var/jb/bin/killall /usr/bin/killall killall; do
+  if [ -x "$k" ]; then
+    "$k" -9 WeChat 2>/dev/null || true
+    "$k" -9 Alipay 2>/dev/null || true
+    break
+  fi
+done
+exit 0
+EOF
+chmod 755 tweak_staging/DEBIAN/postinst
+
+dpkg-deb -b -Zgzip tweak_staging "$STEP_OUT"
+echo "  -> $(ls -lh "$STEP_OUT" | awk '{print $5}') bytes"
+echo "DONE(TWEAK): $STEP_OUT"
