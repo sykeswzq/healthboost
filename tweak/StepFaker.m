@@ -190,7 +190,14 @@ static id new_SQ_init(id self, SEL _cmd,
 static long long (*orig_apSteps)(id, SEL) = NULL;
 static long long new_apSteps(id self, SEL _cmd) {
     NSInteger fake = HBReadFakeSteps();
-    if (fake > 0) return (long long)fake;
+    if (fake > 0) {
+        static BOOL apLogged = NO;
+        if (!apLogged) {
+            apLogged = YES;
+            HBProbeLog(@"APStepInfo.numberOfSteps 被调用，返回 fake=%ld（支付宝步数伪造已生效）", (long)fake);
+        }
+        return (long long)fake;
+    }
     return orig_apSteps ? orig_apSteps(self, _cmd) : 0;
 }
 
