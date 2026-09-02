@@ -147,7 +147,7 @@ rm -rf tweak_staging
 mkdir -p tweak_staging/Library/MobileSubstrate/DynamicLibraries
 xcrun --sdk iphoneos clang \
   -dynamiclib -fobjc-arc \
-  -framework Foundation -framework CoreFoundation -framework CoreMotion \
+  -framework Foundation -framework CoreFoundation -framework CoreMotion -framework HealthKit \
   -arch arm64 -arch arm64e \
   -mios-version-min=13.0 \
   -isysroot "$SDK" \
