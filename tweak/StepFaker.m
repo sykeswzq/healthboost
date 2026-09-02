@@ -113,10 +113,6 @@ static NSString *HBQueryTypeIdentifier(id query) {
         id t = [query sampleType];
         if ([t respondsToSelector:@selector(identifier)]) return [t identifier];
     }
-    if ([query respondsToSelector:@selector(type)]) {
-        id t = [query type];
-        if ([t respondsToSelector:@selector(identifier)]) return [t identifier];
-    }
     return nil;
 }
 
