@@ -1,32 +1,3 @@
-// HealthBoost AppDelegate
-#import <UIKit/UIKit.h>
+// AppDelegate 的完整实现（含 UI 初始化）与 main() 入口位于 HealthBoostApp.m。
+// 本文件仅保留头引用，避免在此重复 @implementation 引发 reimplementation 编译错误。
 #import "AppDelegate.h"
-
-@implementation AppDelegate
-
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    // Override point for customization after application launch.
-    return YES;
-}
-
-- (void)applicationWillResignActive:(UIApplication *)application {
-    // Sent when the application is about to move from active to inactive state.
-}
-
-- (void)applicationDidEnterBackground:(UIApplication *)application {
-    // Use this method to release shared resources, save user data, invalidate timers.
-}
-
-- (void)applicationWillEnterForeground:(UIApplication *)application {
-    // Called as part of the transition from the background to the inactive state.
-}
-
-- (void)applicationDidBecomeActive:(UIApplication *)application {
-    // Restart any tasks that were paused while the application was inactive.
-}
-
-- (void)applicationWillTerminate:(UIApplication *)application {
-    // Called when the application is about to terminate. Save data.
-}
-
-@end
