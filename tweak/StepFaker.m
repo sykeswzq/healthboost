@@ -70,8 +70,18 @@ static NSInteger HBReadFakeSteps(void) {
 }
 
 // ---------------------------------------------------------------------------
-// 探测日志：同时写当前进程 Documents/hb_probe.log + 系统 NSLog
+// 探测日志：写到两处，确保一定能找到
+//   (A) 全局路径 /var/mobile/hb_probe_<bundle>.log  —— Filza 里 /var/mobile/ 直接可见
+//   (B) 当前进程 Documents/hb_probe.log           —— roothide 下在 /var/roothide/... 容器内
+// 另外 NSLog（可用设备控制台/idevicesyslog 看）
+// 不论支付宝走哪条接口，tweak 一加载就写「已加载」记录，文件必然存在。
 // ---------------------------------------------------------------------------
+static NSString *HBGlobalProbePath(void) {
+    NSString *bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"unknown";
+    bid = [bid stringByReplacingOccurrencesOfString:@"." withString:@"_"];
+    return [NSString stringWithFormat:@"/var/mobile/hb_probe_%@.log", bid];
+}
+
 static void HBProbeLog(NSString *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -84,14 +94,30 @@ static void HBProbeLog(NSString *fmt, ...) {
     NSString *ts = [df stringFromDate:[NSDate date]];
     NSString *line = [NSString stringWithFormat:@"[%@ %@] %@\n", ts, proc, msg];
 
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    // (A) 全局路径（尽力写，若 roothide 沙盒禁止则静默失败，不影响 B）
+    NSString *gp = HBGlobalProbePath();
+    if (![fm fileExistsAtPath:gp]) {
+        [@"" writeToFile:gp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+    NSFileHandle *gfh = [NSFileHandle fileHandleForWritingAtPath:gp];
+    if (gfh) {
+        [gfh seekToEndOfFile];
+        [gfh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [gfh closeFile];
+    }
+
+    // (B) 当前进程 Documents（沙盒内，必然可写；roothide 下位于 /var/roothide/...）
     NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
         NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *doc = paths.firstObject;
     if (doc.length > 0) {
         NSString *p = [doc stringByAppendingPathComponent:@"hb_probe.log"];
-        NSFileManager *fm = [NSFileManager defaultManager];
         if (![fm fileExistsAtPath:p]) {
-            [@"" writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            NSString *header = [NSString stringWithFormat:
+                @"StepFaker probe log.\nGlobal path = %@\nApp container Documents = %@\n\n", gp, doc];
+            [header writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil];
         }
         NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:p];
         if (fh) {
@@ -100,6 +126,7 @@ static void HBProbeLog(NSString *fmt, ...) {
             [fh closeFile];
         }
     }
+
     NSLog(@"[StepFaker] %@", msg);
 }
 
@@ -453,8 +480,8 @@ static void StepFakerTryHookProbe(void) {
 }
 
 __attribute__((constructor)) static void StepFakerInit(void) {
-    HBProbeLog(@"StepFaker PROBE loaded, bundle=%@",
-        [[NSBundle mainBundle] bundleIdentifier]);
+    NSString *bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"unknown";
+    HBProbeLog(@"StepFaker PROBE loaded, bundle=%@, globalLog=%@", bid, HBGlobalProbePath());
     StepFakerTryHookPedometer();
     StepFakerTryHookHealthKit();
     StepFakerTryHookProbe();
