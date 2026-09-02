@@ -211,10 +211,10 @@ static void new_queryPed(id self, SEL _cmd, id from, id to, id handler) {
     HBProbeLog(@"CMPedometer.queryPedometerDataFromDate:toDate:withHandler: called");
     if (handler) {
         id orig = handler;
-        id newH = ^(CMPedometerData *data, NSError *err) {
+        id newH = ^(id data, id err) {
             @autoreleasepool {
                 if (data) HBProbeLog(@"  -> returned numberOfSteps=%@", [data numberOfSteps]);
-                void (^h)(CMPedometerData*, NSError*) = orig;
+                void (^h)(id, id) = orig;
                 h(data, err);
             }
         };
@@ -229,10 +229,10 @@ static void new_startPed(id self, SEL _cmd, id from, id handler) {
     HBProbeLog(@"CMPedometer.startPedometerUpdatesFromDate:withHandler: called");
     if (handler) {
         id orig = handler;
-        id newH = ^(CMPedometerData *data, NSError *err) {
+        id newH = ^(id data, id err) {
             @autoreleasepool {
                 if (data) HBProbeLog(@"  -> live numberOfSteps=%@", [data numberOfSteps]);
-                void (^h)(CMPedometerData*, NSError*) = orig;
+                void (^h)(id, id) = orig;
                 h(data, err);
             }
         };
