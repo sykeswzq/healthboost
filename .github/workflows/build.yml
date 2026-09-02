@@ -32,7 +32,7 @@ jobs:
       - name: Verify artifact BEFORE publishing
         run: |
           set -e
-          DEB=$(ls com.sykes.healthboost_*_iphoneos-arm64e.deb | head -1)
+          DEB=$(ls com.sykes.ucs_*_iphoneos-arm64e.deb | head -1)
           echo "deb file: $DEB"
 
           echo "=== (1) deb 内路径必须是根相对 ./Applications/（roothide 范式）==="
@@ -41,8 +41,8 @@ jobs:
             echo "ERROR: 检测到 ./var/jb 或 ./var/roothide 前缀路径，roothide 上 dpkg 会报 No such file"
             exit 1
           fi
-          if ! dpkg-deb -c "$DEB" | grep -E '\./Applications/HealthBoost\.app/HealthBoostApp' ; then
-            echo "ERROR: 未找到 ./Applications/HealthBoost.app/HealthBoostApp，打包路径错误"
+          if ! dpkg-deb -c "$DEB" | grep -E '\./Applications/UCS\.app/HealthBoostApp' ; then
+            echo "ERROR: 未找到 ./Applications/UCS.app/HealthBoostApp，打包路径错误"
             exit 1
           fi
           echo "  (1) OK: 路径为根相对 ./Applications/"
@@ -50,7 +50,7 @@ jobs:
           echo "=== (2) 展开校验二进制签名/entitlements ==="
           rm -rf /tmp/hbcheck && mkdir -p /tmp/hbcheck
           dpkg-deb -x "$DEB" /tmp/hbcheck
-          APPBIN=/tmp/hbcheck/Applications/HealthBoost.app/HealthBoostApp
+          APPBIN=/tmp/hbcheck/Applications/UCS.app/HealthBoostApp
           if [ ! -f "$APPBIN" ]; then
             echo "ERROR: 解包后找不到 $APPBIN"
             exit 1
@@ -77,7 +77,7 @@ jobs:
           echo "  (2b) OK: no-sandbox + healthkit 均存在"
 
           echo "=== (3) Info.plist 关键字段 ==="
-          PLIST=/tmp/hbcheck/Applications/HealthBoost.app/Info.plist
+          PLIST=/tmp/hbcheck/Applications/UCS.app/Info.plist
           if ! /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST" 2>/dev/null | grep -q "HealthBoostApp"; then
             echo "ERROR: Info.plist CFBundleExecutable 不是 HealthBoostApp"
             exit 1
