@@ -87,6 +87,7 @@ static void HBProbeLog(NSString *fmt, ...);
 // v1.0.159：增加「值来源」诊断日志，定位 99999 到底来自文件还是 CFPreferences。
 static NSInteger HBReadFakeSteps(void) {
     @autoreleasepool {
+        // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入；支付宝容器一般没有）
         NSInteger fileVal = 0;
         NSString *filePath = nil;
         NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
@@ -103,6 +104,22 @@ static NSInteger HBReadFakeSteps(void) {
                 fileVal = [line integerValue];
             }
         }
+        // ② 共享通道（v1.0.164 新增）：App 把假步数统一写到用户 home 的
+        //    /var/mobile/Documents/hb_steps.txt，任何进程（含支付宝）都能直接读到，
+        //    不依赖各 App 自身沙盒容器。这是支付宝拿到假值的唯一可靠来源。
+        NSInteger sharedVal = 0;
+        {
+            NSString *sp = @"/var/mobile/Documents/hb_steps.txt";
+            NSString *sc = [NSString stringWithContentsOfFile:sp
+                                                    encoding:NSUTF8StringEncoding
+                                                       error:nil];
+            if (sc.length > 0) {
+                NSString *line = [[sc componentsSeparatedByString:@"\n"] firstObject];
+                sharedVal = [line integerValue];
+            }
+        }
+        NSInteger fileValEffective = (sharedVal > 0) ? sharedVal : fileVal;
+
         NSInteger cfVal = 0;
         CFPropertyListRef val = CFPreferencesCopyValue(
             CFSTR("steps"),
@@ -117,10 +134,10 @@ static NSInteger HBReadFakeSteps(void) {
             }
             CFRelease(val);
         }
-        // 优先文件，其次 CFPreferences；两路都打印，便于确认 99999 来自哪
-        NSInteger result = (fileVal > 0) ? fileVal : cfVal;
-        HBProbeLog(@"READ_FAKE: file(%@)=%ld cfPref=%ld -> using=%ld",
-                   filePath ?: @"?", (long)fileVal, (long)cfVal, (long)result);
+        // 优先共享文件，其次进程容器文件，再次 CFPreferences；三路都打印，便于定位 99999 来源
+        NSInteger result = (fileValEffective > 0) ? fileValEffective : cfVal;
+        HBProbeLog(@"READ_FAKE: sharedFile=%ld selfFile=%ld cfPref=%ld -> using=%ld",
+                   (long)sharedVal, (long)fileVal, (long)cfVal, (long)result);
         // 防御：99999 是支付宝的异常/兜底哨兵值（非用户真实意图）；>200000 视为离谱脏值。
         // 正常伪造步数（含 9万~20万）不受影响，仅拦截确切 99999 与明显异常值。
         if (result == 99999 || result > 200000 || result <= 0) {
@@ -594,6 +611,16 @@ __attribute__((constructor)) static void StepFakerInit(void) {
         isAlipay = 1;
     }
     HBRawLog("P2_PROG=%s isAlipay=%d", prog ? prog : "?", isAlipay);
+
+    // 注入诊断（v1.0.164）：把「dylib 是否进入本进程」写到用户 home Documents（纯 POSIX，constructor 阶段安全）。
+    // 支付宝沙盒可能禁止写 /var/mobile 根目录，但 /var/mobile/Documents 是用户目录通常可写；
+    // 若支付宝进程出现 [INJ] ... isAlipay=1，说明 dylib 已注入；若完全没有，说明 plist 过滤未命中。
+    {
+        char inj[640];
+        snprintf(inj, sizeof(inj), "[INJ] %s isAlipay=%d\n", prog ? prog : "?", isAlipay);
+        int fd = open("/var/mobile/Documents/hb_inject.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) { write(fd, inj, (unsigned)strlen(inj)); close(fd); }
+    }
 
     // ---- P3：解析 Substrate / ElleKit 的 MSHookMessageEx ----
     // arm64e 有 PAC 指针认证，只有 MSHookMessageEx 能安全替换 IMP；

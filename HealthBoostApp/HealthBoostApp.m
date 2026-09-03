@@ -440,6 +440,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     self.tableView.tableFooterView = self.statusLabel;
 
     [self loadSettings];
+    [self diagnoseAlipayTarget];
     [self setupNotifications];
     if (self.scheduleOn) [self scheduleDailyNotification];
 
@@ -685,6 +686,32 @@ static NSString *HBNotifFlagPath(void) {
 }
 
 #pragma mark - Settings
+
+// 诊断（v1.0.164）：用 LSApplicationWorkspace 找出设备上「支付宝类」App 的确切 Bundle id 与可执行文件名，
+// 写到 hb_log.txt（用户可直接取）。这能确认 dylib 的 plist 过滤到底该匹配哪个 id/名字——
+// 当前怀疑支付宝 99999 修不好的根因是 dylib 没注入进支付宝（过滤未命中）。
+- (void)diagnoseAlipayTarget {
+    Class LSAW = NSClassFromString(@"LSApplicationWorkspace");
+    if (!LSAW) { HBLog(@"[DIAG] LSApplicationWorkspace 不可用（私有 API 未导出）"); return; }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    id ws = [LSAW performSelector:NSSelectorFromString(@"defaultWorkspace")];
+    if (!ws) { HBLog(@"[DIAG] defaultWorkspace 为空"); return; }
+    NSArray *apps = [ws performSelector:NSSelectorFromString(@"allApplications")];
+    if (!apps || apps.count == 0) { HBLog(@"[DIAG] allApplications 为空"); return; }
+    for (id app in apps) {
+        NSString *bid = [app performSelector:NSSelectorFromString(@"bundleIdentifier")];
+        if (bid && [bid rangeOfString:@"alipay" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            NSString *exec = nil;
+            @try { exec = [app performSelector:NSSelectorFromString(@"executablePath")]; } @catch (id e) { exec = nil; }
+            NSString *name = nil;
+            @try { name = [app performSelector:NSSelectorFromString(@"localizedName")]; } @catch (id e) { name = nil; }
+            HBLog(@"[DIAG] 发现支付宝类 App: bid=%@ exec=%@ name=%@", bid, exec, name);
+        }
+    }
+#pragma clang diagnostic pop
+    HBLog(@"[DIAG] 支付宝目标扫描完成");
+}
 
 - (void)loadSettings {
     NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:HBSettingsKey];
