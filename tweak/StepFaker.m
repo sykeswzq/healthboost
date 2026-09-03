@@ -561,62 +561,66 @@ static void StepFakerTryHookProbe(void) {
 //        不会误 hook 其他无关方法。
 
 static void HBLogInjectScanForAlipayClasses(void) {
-    // 获取当前进程所有已注册类的数量
     unsigned int count = 0;
     Class *classes = objc_copyClassList(&count);
     if (!classes) return;
 
-    NSMutableArray<Class *> *gotNumberSteps = [NSMutableArray array];
-    NSMutableArray<Class *> *gotSetNumberSteps = [NSMutableArray array];
+    // C 数组收集候选类（避免 NSMutableArray<Class*> 泛型限制）
+    static Class numStepsCandidates[200];
+    static Class setNumStepsCandidates[200];
+    int numCount = 0, setCount = 0;
 
     for (unsigned int i = 0; i < count; i++) {
         Class cls = classes[i];
         if (!cls) continue;
 
-        // 检查 numberOfSteps 方法（返回 long long 的）
         Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
-        if (m) {
+        if (m && numCount < 200) {
             const char *enc = method_getTypeEncoding(m);
-            if (enc && enc[0] == 'q') { // 'q' = long long
-                NSString *cname = NSStringFromClass(cls);
-                [gotNumberSteps addObject:(__bridge id)cls];
-                HBProbeLog(@"SCAN_FOUND_numberOfSteps: class=%@ enc=%s", cname, enc);
+            if (enc && enc[0] == 'q') {
+                numStepsCandidates[numCount++] = cls;
+                HBProbeLog(@"SCAN_FOUND_numberOfSteps: class=%s enc=%s",
+                           NSStringFromClass(cls).UTF8String, enc);
             }
         }
 
-        // 检查 setNumberOfSteps: 方法（接收 long long 参数的）
         Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
-        if (sm) {
-            const char *senc = method_getTypeEncoding(sm);
-            if (senc && strchr(senc, 'q')) { // 含 long long 参数
-                NSString *cname = NSStringFromClass(cls);
-                [gotSetNumberSteps addObject:(__bridge id)cls];
-                HBProbeLog(@"SCAN_FOUND_setNumberOfSteps: class=%@ enc=%s", cname, senc);
+        if (sm && setCount < 200) {
+            const char *se = method_getTypeEncoding(sm);
+            if (se && strchr(se, 'q')) {
+                setNumStepsCandidates[setCount++] = cls;
+                HBProbeLog(@"SCAN_FOUND_setNumberOfSteps: class=%s enc=%s",
+                           NSStringFromClass(cls).UTF8String, se);
             }
         }
     }
     free(classes);
 
-    // 把扫描结果也写到 inject log（方便真机查看）
     {
         FILE *f = fopen("/var/mobile/Documents/hb_inject.log", "a");
         if (f) {
-            fprintf(f, "\n[SCAN] numberOfSteps candidates (%lu):\n", (unsigned long)gotNumberSteps.count);
-            for (Class cls in gotNumberSteps) {
-                Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
+            fprintf(f, "
+[SCAN] numberOfSteps candidates (%d):
+", numCount);
+            for (int i = 0; i < numCount; i++) {
+                Method m = class_getInstanceMethod(numStepsCandidates[i], @selector(numberOfSteps));
                 const char *enc = m ? method_getTypeEncoding(m) : "?";
-                fprintf(f, "  - %s  enc=%s\n", NSStringFromClass(cls).UTF8String, enc);
+                fprintf(f, "  - %s  enc=%s
+", NSStringFromClass(numStepsCandidates[i]).UTF8String, enc);
             }
-            fprintf(f, "[SCAN] setNumberOfSteps: candidates (%lu):\n", (unsigned long)gotSetNumberSteps.count);
-            for (Class cls in gotSetNumberSteps) {
-                Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
-                const char *senc = sm ? method_getTypeEncoding(sm) : "?";
-                fprintf(f, "  - %s  enc=%s\n", NSStringFromClass(cls).UTF8String, senc);
+            fprintf(f, "[SCAN] setNumberOfSteps: candidates (%d):
+", setCount);
+            for (int i = 0; i < setCount; i++) {
+                Method sm = class_getInstanceMethod(setNumStepsCandidates[i], @selector(setNumberOfSteps:));
+                const char *se = sm ? method_getTypeEncoding(sm) : "?";
+                fprintf(f, "  - %s  enc=%s
+", NSStringFromClass(setNumStepsCandidates[i]).UTF8String, se);
             }
             fclose(f);
         }
     }
 }
+
 
 static void StepFakerTryHookAlipay(void) {
     static BOOL apDone = NO;
