@@ -579,7 +579,7 @@ static void HBLogInjectScanForAlipayClasses(void) {
             const char *enc = method_getTypeEncoding(m);
             if (enc && enc[0] == 'q') { // 'q' = long long
                 NSString *cname = NSStringFromClass(cls);
-                [gotNumberSteps addObject:__bridge id)cls];
+                [gotNumberSteps addObject:(__bridge id)cls];
                 HBProbeLog(@"SCAN_FOUND_numberOfSteps: class=%@ enc=%s", cname, enc);
             }
         }
@@ -590,7 +590,7 @@ static void HBLogInjectScanForAlipayClasses(void) {
             const char *senc = method_getTypeEncoding(sm);
             if (senc && strchr(senc, 'q')) { // 含 long long 参数
                 NSString *cname = NSStringFromClass(cls);
-                [gotSetNumberSteps addObject:__bridge id)cls];
+                [gotSetNumberSteps addObject:(__bridge id)cls];
                 HBProbeLog(@"SCAN_FOUND_setNumberOfSteps: class=%@ enc=%s", cname, senc);
             }
         }
