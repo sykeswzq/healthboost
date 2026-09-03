@@ -864,49 +864,6 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     // 若 P0 有、后面的 P 缺失：崩溃就发生在最后一个已打印的 P 之后 —— 精确定位。
     HBRawLog("P0_ENTER dylib constructor entered");
 
-    // ---- P0.5：支付宝进程名诊断 ----
-    // 支付宝卡死不注入的最常见原因：plist Executables 写的是 "AlipayWallet"，
-    // 但真机上进程名是 "Alipay"（或反过来）。只用 Bundle ID 过滤就能绕过这个问题，
-    // 但先记下当前所有运行中 App 的进程名 / bundle ID，方便以后排查。
-    // 只抓 com.alipay.iphoneclient 和 com.tencent.xin，避免日志爆炸。
-    {
-        NSBundle *selfBundle = [NSBundle bundleForClass:[self class]];
-        NSString *selfBid = selfBundle.bundleIdentifier ?: @"?";
-        NSArray *allApps = [NSWorkspace sharedWorkspace].runningApplications;
-        NSMutableArray *want = [NSMutableArray array];
-        for (NSRunningApplication *ra in allApps) {
-            NSString *bid = ra.bundleIdentifier;
-            if (![bid hasPrefix:@"com.alipay"] && ![bid hasPrefix:@"com.tencent"]) continue;
-            [want addObject:ra];
-        }
-        if ([want count] > 0) {
-            NSMutableString *s = [NSMutableString stringWithCapacity:2048];
-            [s appendFormat:@"[DIAG] %d target app(s) running (thisBid=%@):\n", (int)[want count], selfBid];
-            for (NSRunningApplication *ra in want) {
-                [s appendFormat:@"  exe=%@ bundle=%@ visible=%d activated=%d\n",
-                 ra.executableURL.lastPathComponent ?: @"?",
-                 ra.bundleIdentifier ?: @"?",
-                 (int)ra.isVisible, (int)ra.isActive];
-            }
-            // 写进 /var/mobile/hb_probe_<prog>.log（POSIX-safe，不需要 Foundation 初始化）
-            const char *p = getprogname();
-            char logpath[512];
-            snprintf(logpath, sizeof(logpath), "/var/mobile/hb_probe_diag_%s.log", p ?: "unknown");
-            int fd = open(logpath, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            if (fd >= 0) {
-                NSString *ns = @(logpath);
-                NSData *data = [s dataUsingEncoding:NSUTF8StringEncoding];
-                write(fd, [data bytes], (unsigned)[data length]);
-                close(fd);
-                HBRawLog("P0.5_DIAG_WROTE %s entries=%d", logpath, (int)[want count]);
-            } else {
-                HBRawLog("P0.5_DIAG_FAIL open %s errno=%d", logpath, errno);
-            }
-        } else {
-            HBRawLog("P0.5_DIAG_NONE: no Alipay/WeChat app currently running");
-        }
-    }
-
     // ---- P1：安全模式开关 ----
     // 真机上 `touch /var/mobile/hb_nohook` 后重启 App：只写日志、不装任何 hook。
     // 用它一次性区分「崩溃来自注入本身」还是「崩溃来自某个 hook」。
@@ -930,10 +887,14 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     // 注入诊断（v1.0.164）：把「dylib 是否进入本进程」写到用户 home Documents（纯 POSIX，constructor 阶段安全）。
     // 支付宝沙盒可能禁止写 /var/mobile 根目录，但 /var/mobile/Documents 是用户目录通常可写；
     // 若支付宝进程出现 [INJ] ... isAlipay=1，说明 dylib 已注入；若完全没有，说明 plist 过滤未命中。
+    // P0.5 也在同一位置写 [INJ-PROBE] 行，方便区分不同版本的日志格式。
     {
         char inj[640];
-        snprintf(inj, sizeof(inj), "[INJ] %s isAlipay=%d\n", prog ? prog : "?", isAlipay);
+        snprintf(inj, sizeof(inj), "[INJ-PROBE] %s isAlipay=%d\n", prog ? prog : "?", isAlipay);
         int fd = open("/var/mobile/Documents/hb_inject.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) { write(fd, inj, (unsigned)strlen(inj)); close(fd); }
+        snprintf(inj, sizeof(inj), "[INJ] %s isAlipay=%d\n", prog ? prog : "?", isAlipay);
+        fd = open("/var/mobile/Documents/hb_inject.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (fd >= 0) { write(fd, inj, (unsigned)strlen(inj)); close(fd); }
     }
 
