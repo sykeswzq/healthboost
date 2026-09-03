@@ -1,0 +1,12 @@
+﻿2026-09-02T06:47:25.3993680Z ##[group]Run bash build.sh
+2026-09-02T06:47:25.3993920Z [36;1mbash build.sh[0m
+2026-09-02T06:47:25.4026710Z shell: /bin/bash -e {0}
+2026-09-02T06:47:25.4026880Z ##[endgroup]
+2026-09-02T06:47:25.4375540Z 版本号: 1.0.142-1
+2026-09-02T06:47:25.4377220Z [1/4] 创建 staging 目录（roothide 根相对 ./Applications）
+2026-09-02T06:47:26.7138890Z [2/4] 编译 iOS App (HealthBoost.app) — arm64 + arm64e
+2026-09-02T06:47:31.2126090Z build.sh: line 50: staging/Applications/HealthBoost.app/HealthBoostApp: No such file or directory
+2026-09-02T06:47:31.2129410Z   app:  bytes
+2026-09-02T06:47:31.2131410Z [3/4] 拷贝 App 资源 + ldid 签名
+2026-09-02T06:47:31.2287840Z chmod: staging/Applications/HealthBoost.app/Info.plist: No such file or directory
+2026-09-02T06:47:31.2301420Z ##[error]Process completed with exit code 1.

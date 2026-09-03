@@ -1,0 +1,69 @@
+﻿2026-09-02T06:51:21.7941430Z ##[group]Run set -e
+2026-09-02T06:51:21.7941890Z [36;1mset -e[0m
+2026-09-02T06:51:21.7942250Z [36;1mDEB=$(ls com.sykes.healthboost_*_iphoneos-arm64e.deb | head -1)[0m
+2026-09-02T06:51:21.8091370Z [36;1mecho "deb file: $DEB"[0m
+2026-09-02T06:51:21.8092260Z [36;1m[0m
+2026-09-02T06:51:21.8092830Z [36;1mecho "=== (1) deb 内路径必须是根相对 ./Applications/（roothide 范式）==="[0m
+2026-09-02T06:51:21.8093770Z [36;1m# 用 dpkg-deb -c 列出内容；若存在 ./var/jb 或 ./var/roothide 前缀则视为错误[0m
+2026-09-02T06:51:21.8094680Z [36;1mif dpkg-deb -c "$DEB" | grep -E '\./var/(jb|roothide)/' ; then[0m
+2026-09-02T06:51:21.8096110Z [36;1m  echo "ERROR: 检测到 ./var/jb 或 ./var/roothide 前缀路径，roothide 上 dpkg 会报 No such file"[0m
+2026-09-02T06:51:21.8097170Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8097630Z [36;1mfi[0m
+2026-09-02T06:51:21.8098410Z [36;1mif ! dpkg-deb -c "$DEB" | grep -E '\./Applications/HealthBoost\.app/HealthBoostApp' ; then[0m
+2026-09-02T06:51:21.8099800Z [36;1m  echo "ERROR: 未找到 ./Applications/HealthBoost.app/HealthBoostApp，打包路径错误"[0m
+2026-09-02T06:51:21.8102160Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8102490Z [36;1mfi[0m
+2026-09-02T06:51:21.8102680Z [36;1mecho "  (1) OK: 路径为根相对 ./Applications/"[0m
+2026-09-02T06:51:21.8102910Z [36;1m[0m
+2026-09-02T06:51:21.8103090Z [36;1mecho "=== (2) 展开校验二进制签名/entitlements ==="[0m
+2026-09-02T06:51:21.8103390Z [36;1mrm -rf /tmp/hbcheck && mkdir -p /tmp/hbcheck[0m
+2026-09-02T06:51:21.8103680Z [36;1mdpkg-deb -x "$DEB" /tmp/hbcheck[0m
+2026-09-02T06:51:21.8104130Z [36;1mAPPBIN=/tmp/hbcheck/Applications/HealthBoost.app/HealthBoostApp[0m
+2026-09-02T06:51:21.8104660Z [36;1mif [ ! -f "$APPBIN" ]; then[0m
+2026-09-02T06:51:21.8104890Z [36;1m  echo "ERROR: 解包后找不到 $APPBIN"[0m
+2026-09-02T06:51:21.8105100Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8105350Z [36;1mfi[0m
+2026-09-02T06:51:21.8105500Z [36;1m[0m
+2026-09-02T06:51:21.8105720Z [36;1mecho "  (2a) Mach-O 头必须是 fat (cafebabe)"[0m
+2026-09-02T06:51:21.8106080Z [36;1mmagic=$(xxd -p -l4 "$APPBIN" | tr -d '\n')[0m
+2026-09-02T06:51:21.8106440Z [36;1mif [ "$magic" != "cafebabe" ]; then[0m
+2026-09-02T06:51:21.8106740Z [36;1m  echo "ERROR: 二进制 Mach-O 头异常 (magic=$magic)，签名/打包损坏"[0m
+2026-09-02T06:51:21.8107150Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8107460Z [36;1mfi[0m
+2026-09-02T06:51:21.8107620Z [36;1mecho "  (2a) OK: magic=$magic"[0m
+2026-09-02T06:51:21.8107810Z [36;1m[0m
+2026-09-02T06:51:21.8108030Z [36;1mecho "  (2b) entitlements 必须含 no-sandbox 与 healthkit"[0m
+2026-09-02T06:51:21.8108330Z [36;1mENT=$(ldid -e "$APPBIN" 2>/dev/null || true)[0m
+2026-09-02T06:51:21.8108700Z [36;1mif ! echo "$ENT" | grep -q "no-sandbox"; then[0m
+2026-09-02T06:51:21.8109270Z [36;1m  echo "ERROR: 签名缺少 com.apple.private.security.no-sandbox（roothide 必需）"[0m
+2026-09-02T06:51:21.8109600Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8109740Z [36;1mfi[0m
+2026-09-02T06:51:21.8110030Z [36;1mif ! echo "$ENT" | grep -q "healthkit"; then[0m
+2026-09-02T06:51:21.8110380Z [36;1m  echo "ERROR: 签名缺少 healthkit 权限（App 无法写入健康数据）"[0m
+2026-09-02T06:51:21.8110770Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8111020Z [36;1mfi[0m
+2026-09-02T06:51:21.8112130Z [36;1mecho "  (2b) OK: no-sandbox + healthkit 均存在"[0m
+2026-09-02T06:51:21.8112440Z [36;1m[0m
+2026-09-02T06:51:21.8112590Z [36;1mecho "=== (3) Info.plist 关键字段 ==="[0m
+2026-09-02T06:51:21.8112890Z [36;1mPLIST=/tmp/hbcheck/Applications/HealthBoost.app/Info.plist[0m
+2026-09-02T06:51:21.8113560Z [36;1mif ! /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST" 2>/dev/null | grep -q "HealthBoostApp"; then[0m
+2026-09-02T06:51:21.8114180Z [36;1m  echo "ERROR: Info.plist CFBundleExecutable 不是 HealthBoostApp"[0m
+2026-09-02T06:51:21.8114620Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8114770Z [36;1mfi[0m
+2026-09-02T06:51:21.8114980Z [36;1m# 不应引用不存在的 storyboard[0m
+2026-09-02T06:51:21.8115450Z [36;1mif /usr/libexec/PlistBuddy -c "Print :UIMainStoryboardFile" "$PLIST" 2>/dev/null | grep -q "Main"; then[0m
+2026-09-02T06:51:21.8116060Z [36;1m  echo "ERROR: Info.plist 引用了不存在的 Main.storyboard"[0m
+2026-09-02T06:51:21.8116930Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8117420Z [36;1mfi[0m
+2026-09-02T06:51:21.8117800Z [36;1mecho "  (3) OK: CFBundleExecutable=HealthBoostApp，无 storyboard 引用"[0m
+2026-09-02T06:51:21.8118230Z [36;1m[0m
+2026-09-02T06:51:21.8118450Z [36;1mecho "=== 全部校验通过，可安全发布 ==="[0m
+2026-09-02T06:51:21.8181540Z shell: /bin/bash -e {0}
+2026-09-02T06:51:21.8181840Z ##[endgroup]
+2026-09-02T06:51:21.9051790Z ls: com.sykes.healthboost_*_iphoneos-arm64e.deb: No such file or directory
+2026-09-02T06:51:21.9061920Z deb file: 
+2026-09-02T06:51:21.9063130Z === (1) deb 内路径必须是根相对 ./Applications/（roothide 范式）===
+2026-09-02T06:51:21.9172190Z dpkg-deb: error: failed to read archive «»: No such file or directory
+2026-09-02T06:51:21.9283400Z dpkg-deb: error: failed to read archive «»: No such file or directory
+2026-09-02T06:51:21.9287390Z ERROR: 未找到 ./Applications/HealthBoost.app/HealthBoostApp，打包路径错误
+2026-09-02T06:51:21.9299790Z ##[error]Process completed with exit code 1.

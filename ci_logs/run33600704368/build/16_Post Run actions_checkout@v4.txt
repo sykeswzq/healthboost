@@ -1,0 +1,14 @@
+﻿2026-09-02T06:51:21.9499470Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-02T06:51:21.9501180Z Post job cleanup.
+2026-09-02T06:51:22.5210640Z [command]/opt/homebrew/bin/git version
+2026-09-02T06:51:22.5512610Z git version 2.55.0
+2026-09-02T06:51:22.5563020Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/88318c23-bea3-4e30-9ffe-1f81964e1f50/.gitconfig'
+2026-09-02T06:51:22.5570060Z Temporarily overriding HOME='/Users/runner/work/_temp/88318c23-bea3-4e30-9ffe-1f81964e1f50' before making global git config changes
+2026-09-02T06:51:22.5571020Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-02T06:51:22.5593040Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/healthboost/healthboost
+2026-09-02T06:51:22.5732990Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-02T06:51:22.5813210Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-02T06:51:22.7417040Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-02T06:51:22.7520260Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-02T06:51:22.9201430Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-02T06:51:22.9506120Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url

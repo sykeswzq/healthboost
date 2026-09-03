@@ -12,6 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Clear build cache
         run: |
@@ -32,7 +33,7 @@ jobs:
       - name: Verify artifact BEFORE publishing
         run: |
           set -e
-          DEB=$(ls com.sykes.healthboost_*_iphoneos-arm64e.deb | head -1)
+          DEB=$(ls com.sykes.ucs_*_iphoneos-arm64e.deb | head -1)
           echo "deb file: $DEB"
 
           echo "=== (1) deb 内路径必须是根相对 ./Applications/（roothide 范式）==="
@@ -41,8 +42,8 @@ jobs:
             echo "ERROR: 检测到 ./var/jb 或 ./var/roothide 前缀路径，roothide 上 dpkg 会报 No such file"
             exit 1
           fi
-          if ! dpkg-deb -c "$DEB" | grep -E '\./Applications/HealthBoost\.app/HealthBoostApp' ; then
-            echo "ERROR: 未找到 ./Applications/HealthBoost.app/HealthBoostApp，打包路径错误"
+          if ! dpkg-deb -c "$DEB" | grep -E '\./Applications/UCS\.app/HealthBoostApp' ; then
+            echo "ERROR: 未找到 ./Applications/UCS.app/HealthBoostApp，打包路径错误"
             exit 1
           fi
           echo "  (1) OK: 路径为根相对 ./Applications/"
@@ -50,7 +51,7 @@ jobs:
           echo "=== (2) 展开校验二进制签名/entitlements ==="
           rm -rf /tmp/hbcheck && mkdir -p /tmp/hbcheck
           dpkg-deb -x "$DEB" /tmp/hbcheck
-          APPBIN=/tmp/hbcheck/Applications/HealthBoost.app/HealthBoostApp
+          APPBIN=/tmp/hbcheck/Applications/UCS.app/HealthBoostApp
           if [ ! -f "$APPBIN" ]; then
             echo "ERROR: 解包后找不到 $APPBIN"
             exit 1
@@ -77,7 +78,7 @@ jobs:
           echo "  (2b) OK: no-sandbox + healthkit 均存在"
 
           echo "=== (3) Info.plist 关键字段 ==="
-          PLIST=/tmp/hbcheck/Applications/HealthBoost.app/Info.plist
+          PLIST=/tmp/hbcheck/Applications/UCS.app/Info.plist
           if ! /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST" 2>/dev/null | grep -q "HealthBoostApp"; then
             echo "ERROR: Info.plist CFBundleExecutable 不是 HealthBoostApp"
             exit 1
@@ -91,37 +92,14 @@ jobs:
 
           echo "=== 全部校验通过，可安全发布 ==="
 
-      - name: Verify StepFaker tweak artifact BEFORE publishing
+      - name: Verify StepFaker tweak embedded in single deb
         run: |
           set -e
-          TDEB=$(ls com.sykes.stepfaker_*_iphoneos-arm64e.deb | head -1)
-          echo "tweak deb file: $TDEB"
-          if [ -z "$TDEB" ]; then
-            echo "ERROR: 未找到 com.sykes.stepfaker_*.deb"
-            exit 1
-          fi
-
-          echo "=== (1) tweak deb 内路径必须是根相对 ./Library/（roothide 范式）==="
-          if dpkg-deb -c "$TDEB" | grep -E '\./var/(jb|roothide)/' ; then
-            echo "ERROR: 检测到 ./var/jb 或 ./var/roothide 前缀路径"
-            exit 1
-          fi
-          if ! dpkg-deb -c "$TDEB" | grep -E '\./Library/MobileSubstrate/DynamicLibraries/StepFaker\.dylib' ; then
-            echo "ERROR: 未找到 ./Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib"
-            exit 1
-          fi
-          if ! dpkg-deb -c "$TDEB" | grep -E '\./Library/MobileSubstrate/DynamicLibraries/StepFaker\.plist' ; then
-            echo "ERROR: 未找到 StepFaker.plist filter"
-            exit 1
-          fi
-          echo "  (1) OK: 路径为根相对 ./Library/MobileSubstrate/"
-
-          echo "=== (2) 展开校验 dylib 签名 + filter 内容 ==="
-          rm -rf /tmp/tcheck && mkdir -p /tmp/tcheck
-          dpkg-deb -x "$TDEB" /tmp/tcheck
-          TDBIN=/tmp/tcheck/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
-          TDPLIST=/tmp/tcheck/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
-          if [ ! -f "$TDBIN" ]; then echo "ERROR: 解包后找不到 dylib"; exit 1; fi
+          TDBIN=/tmp/hbcheck/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
+          TDPLIST=/tmp/hbcheck/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
+          if [ ! -f "$TDBIN" ]; then echo "ERROR: 单 deb 内未找到 StepFaker.dylib"; exit 1; fi
+          if [ ! -f "$TDPLIST" ]; then echo "ERROR: 单 deb 内未找到 StepFaker.plist"; exit 1; fi
+          echo "  (1) OK: 单 deb 内含 tweak dylib + plist（根相对 ./Library/MobileSubstrate/）"
 
           echo "  (2a) dylib Mach-O 头必须是 fat (cafebabe)"
           tmagic=$(xxd -p -l4 "$TDBIN" | tr -d '\n')
@@ -147,7 +125,7 @@ jobs:
           fi
           echo "  (2b) OK: 仅注入 com.tencent.xin + com.alipay.iphoneclient，无通配"
 
-          echo "=== tweak 全部校验通过，可安全发布 ==="
+          echo "=== 单 deb 内 tweak 校验通过，可安全发布 ==="
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

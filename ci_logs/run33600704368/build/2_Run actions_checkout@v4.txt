@@ -1,0 +1,85 @@
+﻿2026-09-02T06:50:57.0444560Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-02T06:50:57.0451950Z ##[group]Run actions/checkout@v4
+2026-09-02T06:50:57.0452500Z with:
+2026-09-02T06:50:57.0452850Z   persist-credentials: false
+2026-09-02T06:50:57.0453250Z   repository: sykeswzq/healthboost
+2026-09-02T06:50:57.0456190Z   token: ***
+2026-09-02T06:50:57.0456500Z   ssh-strict: true
+2026-09-02T06:50:57.0456830Z   ssh-user: git
+2026-09-02T06:50:57.0457150Z   clean: true
+2026-09-02T06:50:57.0457510Z   sparse-checkout-cone-mode: true
+2026-09-02T06:50:57.0457910Z   fetch-depth: 1
+2026-09-02T06:50:57.0458230Z   fetch-tags: false
+2026-09-02T06:50:57.0458560Z   show-progress: true
+2026-09-02T06:50:57.0458890Z   lfs: false
+2026-09-02T06:50:57.0459210Z   submodules: false
+2026-09-02T06:50:57.0459670Z   set-safe-directory: true
+2026-09-02T06:50:57.0460060Z   allow-unsafe-pr-checkout: false
+2026-09-02T06:50:57.0460670Z ##[endgroup]
+2026-09-02T06:50:57.5923090Z Syncing repository: sykeswzq/healthboost
+2026-09-02T06:50:57.5926960Z ##[group]Getting Git version info
+2026-09-02T06:50:57.5928260Z Working directory is '/Users/runner/work/healthboost/healthboost'
+2026-09-02T06:50:57.5930910Z [command]/opt/homebrew/bin/git version
+2026-09-02T06:50:57.6244090Z git version 2.55.0
+2026-09-02T06:50:57.6267910Z ##[endgroup]
+2026-09-02T06:50:57.6277140Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/7ce02e4d-92e3-4015-817e-0b84ea5b0b65/.gitconfig'
+2026-09-02T06:50:57.6288820Z Temporarily overriding HOME='/Users/runner/work/_temp/7ce02e4d-92e3-4015-817e-0b84ea5b0b65' before making global git config changes
+2026-09-02T06:50:57.6290160Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-02T06:50:57.6294960Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/healthboost/healthboost
+2026-09-02T06:50:57.6438540Z Deleting the contents of '/Users/runner/work/healthboost/healthboost'
+2026-09-02T06:50:57.6464830Z ##[group]Initializing the repository
+2026-09-02T06:50:57.6465820Z [command]/opt/homebrew/bin/git init /Users/runner/work/healthboost/healthboost
+2026-09-02T06:50:57.6779330Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-02T06:50:57.6781780Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-02T06:50:57.6782660Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-02T06:50:57.6783440Z hint: call:
+2026-09-02T06:50:57.6783790Z hint:
+2026-09-02T06:50:57.6784210Z hint: 	git config --global init.defaultBranch <name>
+2026-09-02T06:50:57.6784680Z hint:
+2026-09-02T06:50:57.6785350Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-02T06:50:57.6786080Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-02T06:50:57.6786770Z hint:
+2026-09-02T06:50:57.6787220Z hint: 	git branch -m <name>
+2026-09-02T06:50:57.6787600Z hint:
+2026-09-02T06:50:57.6788250Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-02T06:50:57.6789060Z Initialized empty Git repository in /Users/runner/work/healthboost/healthboost/.git/
+2026-09-02T06:50:57.6795070Z [command]/opt/homebrew/bin/git remote add origin https://github.com/sykeswzq/healthboost
+2026-09-02T06:50:57.6913190Z ##[endgroup]
+2026-09-02T06:50:57.6915740Z ##[group]Disabling automatic garbage collection
+2026-09-02T06:50:57.6923300Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+2026-09-02T06:50:57.7014920Z ##[endgroup]
+2026-09-02T06:50:57.7015680Z ##[group]Setting up auth
+2026-09-02T06:50:57.7026810Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-02T06:50:57.7126480Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-02T06:50:57.8516340Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-02T06:50:57.8599110Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-02T06:50:57.9691850Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-02T06:50:58.1029210Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-02T06:50:58.1542410Z [command]/opt/homebrew/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-02T06:50:58.1636490Z ##[endgroup]
+2026-09-02T06:50:58.1638800Z ##[group]Fetching the repository
+2026-09-02T06:50:58.1642110Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +988eb527299d86f5f3b8f814c1d0261c3c2c8978:refs/remotes/origin/main
+2026-09-02T06:50:58.6663280Z From https://github.com/sykeswzq/healthboost
+2026-09-02T06:50:58.6666570Z  * [new ref]         988eb527299d86f5f3b8f814c1d0261c3c2c8978 -> origin/main
+2026-09-02T06:50:58.6674160Z ##[endgroup]
+2026-09-02T06:50:58.6678390Z ##[group]Determining the checkout info
+2026-09-02T06:50:58.6679750Z ##[endgroup]
+2026-09-02T06:50:58.6680750Z [command]/opt/homebrew/bin/git sparse-checkout disable
+2026-09-02T06:50:58.6786220Z [command]/opt/homebrew/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-02T06:50:58.6921520Z ##[group]Checking out the ref
+2026-09-02T06:50:58.6923660Z [command]/opt/homebrew/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-09-02T06:50:58.7178990Z Switched to a new branch 'main'
+2026-09-02T06:50:58.7185770Z branch 'main' set up to track 'origin/main'.
+2026-09-02T06:50:58.7192060Z ##[endgroup]
+2026-09-02T06:50:58.7295710Z [command]/opt/homebrew/bin/git log -1 --format=%H
+2026-09-02T06:50:58.7393690Z 988eb527299d86f5f3b8f814c1d0261c3c2c8978
+2026-09-02T06:50:58.7414410Z ##[group]Removing auth
+2026-09-02T06:50:58.7417780Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-02T06:50:58.7490010Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-02T06:50:58.8961830Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-02T06:50:58.9001830Z http.https://github.com/.extraheader
+2026-09-02T06:50:58.9097420Z [command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-09-02T06:50:58.9183190Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-02T06:50:59.0435270Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-02T06:50:59.0563300Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-02T06:50:59.2359890Z ##[endgroup]

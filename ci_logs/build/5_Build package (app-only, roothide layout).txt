@@ -1,0 +1,97 @@
+﻿2026-09-02T06:37:40.2608230Z ##[group]Run bash build.sh
+2026-09-02T06:37:40.2608840Z [36;1mbash build.sh[0m
+2026-09-02T06:37:40.2687850Z shell: /bin/bash -e {0}
+2026-09-02T06:37:40.2688120Z ##[endgroup]
+2026-09-02T06:37:40.3249560Z 版本号: 1.0.140-1
+2026-09-02T06:37:40.3254150Z [1/4] 创建 staging 目录（roothide 根相对 ./Applications）
+2026-09-02T06:37:41.6936900Z [2/4] 编译 iOS App (HealthBoost.app) — arm64 + arm64e
+2026-09-02T06:37:44.1595110Z HealthBoostApp/HealthBoostApp.m:382:58: error: no type or protocol named 'UNUserNotificationCenterDelegate'
+2026-09-02T06:37:44.1596030Z   382 | @interface HBMainViewController : UITableViewController <UNUserNotificationCenterDelegate>
+2026-09-02T06:37:44.1596990Z       |                                                          ^
+2026-09-02T06:37:44.1602070Z HealthBoostApp/HealthBoostApp.m:575:33: error: expected a type
+2026-09-02T06:37:44.1604130Z   575 | - (void)userNotificationCenter:(UNUserNotificationCenter *)center willPresentNotification:(UNNotification *)notification withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+2026-09-02T06:37:44.1605620Z       |                                 ^
+2026-09-02T06:37:44.1606410Z HealthBoostApp/HealthBoostApp.m:575:154: error: a parameter list without types is only allowed in a function definition
+2026-09-02T06:37:44.1608790Z   575 | - (void)userNotificationCenter:(UNUserNotificationCenter *)center willPresentNotification:(UNNotification *)notification withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+2026-09-02T06:37:44.1609920Z       |                                                                                                                                                          ^
+2026-09-02T06:37:44.1610410Z HealthBoostApp/HealthBoostApp.m:579:33: error: expected a type
+2026-09-02T06:37:44.1611410Z   579 | - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void(^)(void))completionHandler {
+2026-09-02T06:37:44.1612600Z       |                                 ^
+2026-09-02T06:37:44.2161570Z HealthBoostApp/HealthBoostApp.m:422:5: error: use of undeclared identifier 'UNUserNotificationCenter'
+2026-09-02T06:37:44.2163330Z   422 |     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
+2026-09-02T06:37:44.2164030Z       |     ^~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.2173910Z HealthBoostApp/HealthBoostApp.m:422:31: error: use of undeclared identifier 'c'
+2026-09-02T06:37:44.2176060Z   422 |     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
+2026-09-02T06:37:44.2177490Z       |                               ^
+2026-09-02T06:37:44.2494010Z HealthBoostApp/HealthBoostApp.m:422:36: error: unknown receiver 'UNUserNotificationCenter'; did you mean 'NSNotificationCenter'?
+2026-09-02T06:37:44.2495220Z   422 |     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
+2026-09-02T06:37:44.2495870Z       |                                    ^~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.2496350Z       |                                    NSNotificationCenter
+2026-09-02T06:37:44.2497460Z /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/Foundation.framework/Headers/NSNotificationQueue.h:8:24: note: 'NSNotificationCenter' declared here
+2026-09-02T06:37:44.2499010Z     8 | @class NSNotification, NSNotificationCenter, NSArray<ObjectType>, NSString;
+2026-09-02T06:37:44.2499520Z       |                        ^
+2026-09-02T06:37:44.2505430Z HealthBoostApp/HealthBoostApp.m:422:61: error: no known class method for selector 'currentNotificationCenter'
+2026-09-02T06:37:44.2508130Z   422 |     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
+2026-09-02T06:37:44.2509420Z       |                                                             ^~~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.2516690Z HealthBoostApp/HealthBoostApp.m:423:5: error: use of undeclared identifier 'c'
+2026-09-02T06:37:44.2520670Z   423 |     c.delegate = self;
+2026-09-02T06:37:44.2548170Z       |     ^
+2026-09-02T06:37:44.2549720Z HealthBoostApp/HealthBoostApp.m:424:6: error: use of undeclared identifier 'c'
+2026-09-02T06:37:44.2551680Z   424 |     [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert completionHandler:^(BOOL g, NSError *e){ (void)g; (void)e; }];
+2026-09-02T06:37:44.2553770Z       |      ^
+2026-09-02T06:37:44.2593600Z HealthBoostApp/HealthBoostApp.m:528:34: warning: 'UIDatePickerStyleWheels' is only available on iOS 13.4 or newer [-Wunguarded-availability-new]
+2026-09-02T06:37:44.2595500Z   528 |     p.preferredDatePickerStyle = UIDatePickerStyleWheels;
+2026-09-02T06:37:44.2596810Z       |                                  ^~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.2598140Z /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/UIKit.framework/Headers/UIDatePicker.h:28:28: note: 'UIDatePickerStyle' has been marked as being introduced in iOS 13.4 here, but the deployment target is iOS 13.0.0
+2026-09-02T06:37:44.2600380Z    28 | typedef NS_ENUM(NSInteger, UIDatePickerStyle) {
+2026-09-02T06:37:44.2601620Z       |                            ^
+2026-09-02T06:37:44.2602310Z HealthBoostApp/HealthBoostApp.m:528:34: note: enclose 'UIDatePickerStyleWheels' in an @available check to silence this warning
+2026-09-02T06:37:44.2603020Z   528 |     p.preferredDatePickerStyle = UIDatePickerStyleWheels;
+2026-09-02T06:37:44.2603440Z       |                                  ^~~~~~~~~~~~~~~~~~~~~~~ 
+2026-09-02T06:37:44.2604170Z HealthBoostApp/HealthBoostApp.m:528:7: warning: 'setPreferredDatePickerStyle:' is only available on iOS 13.4 or newer [-Wunguarded-availability-new]
+2026-09-02T06:37:44.2605000Z   528 |     p.preferredDatePickerStyle = UIDatePickerStyleWheels;
+2026-09-02T06:37:44.2605420Z       |       ^~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.2606590Z /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/UIKit.framework/Headers/UIDatePicker.h:57:60: note: 'setPreferredDatePickerStyle:' has been marked as being introduced in iOS 13.4 here, but the deployment target is iOS 13.0.0
+2026-09-02T06:37:44.2608190Z    57 | @property (nonatomic, readwrite, assign) UIDatePickerStyle preferredDatePickerStyle API_AVAILABLE(ios(13.4)) API_UNAVAILABLE(tvos, watchos);
+2026-09-02T06:37:44.2608960Z       |                                                            ^
+2026-09-02T06:37:44.2609800Z HealthBoostApp/HealthBoostApp.m:528:7: note: enclose 'setPreferredDatePickerStyle:' in an @available check to silence this warning
+2026-09-02T06:37:44.2610480Z   528 |     p.preferredDatePickerStyle = UIDatePickerStyleWheels;
+2026-09-02T06:37:44.2611040Z       |       ^~~~~~~~~~~~~~~~~~~~~~~~                           
+2026-09-02T06:37:44.2891710Z HealthBoostApp/HealthBoostApp.m:555:12: error: unknown receiver 'UNUserNotificationCenter'; did you mean 'NSNotificationCenter'?
+2026-09-02T06:37:44.2893040Z   555 |     else [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifier:@"UCSDailyGen"];
+2026-09-02T06:37:44.2893910Z       |            ^~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.2894260Z       |            NSNotificationCenter
+2026-09-02T06:37:44.2895850Z /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/Foundation.framework/Headers/NSNotificationQueue.h:8:24: note: 'NSNotificationCenter' declared here
+2026-09-02T06:37:44.2897110Z     8 | @class NSNotification, NSNotificationCenter, NSArray<ObjectType>, NSString;
+2026-09-02T06:37:44.2897520Z       |                        ^
+2026-09-02T06:37:44.2898070Z HealthBoostApp/HealthBoostApp.m:555:37: error: no known class method for selector 'currentNotificationCenter'
+2026-09-02T06:37:44.2898940Z   555 |     else [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifier:@"UCSDailyGen"];
+2026-09-02T06:37:44.2900210Z       |                                     ^~~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.2908840Z HealthBoostApp/HealthBoostApp.m:555:64: error: no known instance method for selector 'removePendingNotificationRequestsWithIdentifier:'
+2026-09-02T06:37:44.2909810Z   555 |     else [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifier:@"UCSDailyGen"];
+2026-09-02T06:37:44.2910750Z       |                                                                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.3416520Z HealthBoostApp/HealthBoostApp.m:560:5: error: use of undeclared identifier 'UNUserNotificationCenter'
+2026-09-02T06:37:44.3417200Z   560 |     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
+2026-09-02T06:37:44.3417590Z       |     ^~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.3483640Z HealthBoostApp/HealthBoostApp.m:560:31: error: use of undeclared identifier 'c'
+2026-09-02T06:37:44.3484570Z   560 |     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
+2026-09-02T06:37:44.3485110Z       |                               ^
+2026-09-02T06:37:44.3702700Z HealthBoostApp/HealthBoostApp.m:560:36: error: unknown receiver 'UNUserNotificationCenter'; did you mean 'NSNotificationCenter'?
+2026-09-02T06:37:44.3703630Z   560 |     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
+2026-09-02T06:37:44.3704120Z       |                                    ^~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.3704430Z       |                                    NSNotificationCenter
+2026-09-02T06:37:44.3705480Z /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/Foundation.framework/Headers/NSNotificationQueue.h:8:24: note: 'NSNotificationCenter' declared here
+2026-09-02T06:37:44.3706620Z     8 | @class NSNotification, NSNotificationCenter, NSArray<ObjectType>, NSString;
+2026-09-02T06:37:44.3706960Z       |                        ^
+2026-09-02T06:37:44.3708160Z HealthBoostApp/HealthBoostApp.m:560:61: error: no known class method for selector 'currentNotificationCenter'
+2026-09-02T06:37:44.3708910Z   560 |     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
+2026-09-02T06:37:44.3709430Z       |                                                             ^~~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.3726280Z HealthBoostApp/HealthBoostApp.m:561:6: error: use of undeclared identifier 'c'
+2026-09-02T06:37:44.3727840Z   561 |     [c removePendingNotificationRequestsWithIdentifier:@"UCSDailyGen"];
+2026-09-02T06:37:44.3728240Z       |      ^
+2026-09-02T06:37:44.4113530Z HealthBoostApp/HealthBoostApp.m:563:5: error: use of undeclared identifier 'UNMutableNotificationContent'
+2026-09-02T06:37:44.4133140Z   563 |     UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
+2026-09-02T06:37:44.4134560Z       |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:37:44.4135520Z fatal error: too many errors emitted, stopping now [-ferror-limit=]
+2026-09-02T06:37:44.4232120Z 2 warnings and 20 errors generated.
+2026-09-02T06:37:45.4127570Z ##[error]Process completed with exit code 1.

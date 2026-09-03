@@ -1,0 +1,307 @@
+﻿2026-09-02T06:50:55.9272310Z Current runner version: '2.336.0'
+2026-09-02T06:50:55.9292380Z ##[group]Runner Image Provisioner
+2026-09-02T06:50:55.9293090Z Hosted Compute Agent
+2026-09-02T06:50:55.9293510Z Version: 20260707.563
+2026-09-02T06:50:55.9293900Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+2026-09-02T06:50:55.9294360Z Build Date: 2026-07-07T19:33:50Z
+2026-09-02T06:50:55.9294890Z Worker ID: {a53bbb20-1516-40f1-b958-6c517c75457d}
+2026-09-02T06:50:55.9295390Z Azure Region: westus
+2026-09-02T06:50:55.9295800Z ##[endgroup]
+2026-09-02T06:50:55.9297020Z ##[group]Operating System
+2026-09-02T06:50:55.9297440Z macOS
+2026-09-02T06:50:55.9297750Z 26.5.2
+2026-09-02T06:50:55.9298070Z 25F84
+2026-09-02T06:50:55.9298400Z ##[endgroup]
+2026-09-02T06:50:55.9298740Z ##[group]Runner Image
+2026-09-02T06:50:55.9299120Z Image: macos-26-arm64
+2026-09-02T06:50:55.9299540Z Version: 20260728.0273.1
+2026-09-02T06:50:55.9300600Z Included Software: https://github.com/actions/runner-images/blob/macos-26-arm64/20260728.0273/images/macos/macos-26-arm64-Readme.md
+2026-09-02T06:50:55.9301840Z Image Release: https://github.com/actions/runner-images/releases/tag/macos-26-arm64%2F20260728.0273
+2026-09-02T06:50:55.9302500Z ##[endgroup]
+2026-09-02T06:50:55.9304030Z ##[group]GITHUB_TOKEN Permissions
+2026-09-02T06:50:55.9306370Z Contents: read
+2026-09-02T06:50:55.9306770Z Metadata: read
+2026-09-02T06:50:55.9307240Z Packages: read
+2026-09-02T06:50:55.9308290Z ##[endgroup]
+2026-09-02T06:50:55.9310520Z Secret source: Actions
+2026-09-02T06:50:55.9311470Z Prepare workflow directory
+2026-09-02T06:50:55.9849390Z Prepare all required actions
+2026-09-02T06:50:56.0026860Z Getting action download info
+2026-09-02T06:50:56.4289730Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-02T06:50:56.7123100Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-09-02T06:50:56.9886450Z Complete job name: build
+2026-09-02T06:50:57.0444590Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-02T06:50:57.0451990Z ##[group]Run actions/checkout@v4
+2026-09-02T06:50:57.0452500Z with:
+2026-09-02T06:50:57.0452850Z   persist-credentials: false
+2026-09-02T06:50:57.0453250Z   repository: sykeswzq/healthboost
+2026-09-02T06:50:57.0456190Z   token: ***
+2026-09-02T06:50:57.0456500Z   ssh-strict: true
+2026-09-02T06:50:57.0456830Z   ssh-user: git
+2026-09-02T06:50:57.0457160Z   clean: true
+2026-09-02T06:50:57.0457510Z   sparse-checkout-cone-mode: true
+2026-09-02T06:50:57.0457910Z   fetch-depth: 1
+2026-09-02T06:50:57.0458230Z   fetch-tags: false
+2026-09-02T06:50:57.0458560Z   show-progress: true
+2026-09-02T06:50:57.0458900Z   lfs: false
+2026-09-02T06:50:57.0459260Z   submodules: false
+2026-09-02T06:50:57.0459680Z   set-safe-directory: true
+2026-09-02T06:50:57.0460060Z   allow-unsafe-pr-checkout: false
+2026-09-02T06:50:57.0460680Z ##[endgroup]
+2026-09-02T06:50:57.5923220Z Syncing repository: sykeswzq/healthboost
+2026-09-02T06:50:57.5927240Z ##[group]Getting Git version info
+2026-09-02T06:50:57.5928270Z Working directory is '/Users/runner/work/healthboost/healthboost'
+2026-09-02T06:50:57.5931000Z [command]/opt/homebrew/bin/git version
+2026-09-02T06:50:57.6244180Z git version 2.55.0
+2026-09-02T06:50:57.6268010Z ##[endgroup]
+2026-09-02T06:50:57.6277170Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/7ce02e4d-92e3-4015-817e-0b84ea5b0b65/.gitconfig'
+2026-09-02T06:50:57.6288870Z Temporarily overriding HOME='/Users/runner/work/_temp/7ce02e4d-92e3-4015-817e-0b84ea5b0b65' before making global git config changes
+2026-09-02T06:50:57.6290170Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-02T06:50:57.6295420Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/healthboost/healthboost
+2026-09-02T06:50:57.6438660Z Deleting the contents of '/Users/runner/work/healthboost/healthboost'
+2026-09-02T06:50:57.6464910Z ##[group]Initializing the repository
+2026-09-02T06:50:57.6465830Z [command]/opt/homebrew/bin/git init /Users/runner/work/healthboost/healthboost
+2026-09-02T06:50:57.6779500Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-02T06:50:57.6781850Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-02T06:50:57.6782660Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-02T06:50:57.6783450Z hint: call:
+2026-09-02T06:50:57.6783790Z hint:
+2026-09-02T06:50:57.6784220Z hint: 	git config --global init.defaultBranch <name>
+2026-09-02T06:50:57.6784680Z hint:
+2026-09-02T06:50:57.6785360Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-02T06:50:57.6786130Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-02T06:50:57.6786780Z hint:
+2026-09-02T06:50:57.6787230Z hint: 	git branch -m <name>
+2026-09-02T06:50:57.6787610Z hint:
+2026-09-02T06:50:57.6788260Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-02T06:50:57.6789060Z Initialized empty Git repository in /Users/runner/work/healthboost/healthboost/.git/
+2026-09-02T06:50:57.6795190Z [command]/opt/homebrew/bin/git remote add origin https://github.com/sykeswzq/healthboost
+2026-09-02T06:50:57.6913300Z ##[endgroup]
+2026-09-02T06:50:57.6915760Z ##[group]Disabling automatic garbage collection
+2026-09-02T06:50:57.6923370Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+2026-09-02T06:50:57.7015010Z ##[endgroup]
+2026-09-02T06:50:57.7015680Z ##[group]Setting up auth
+2026-09-02T06:50:57.7026880Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-02T06:50:57.7128180Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-02T06:50:57.8516460Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-02T06:50:57.8599230Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-02T06:50:57.9691920Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-02T06:50:58.1029340Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-02T06:50:58.1542490Z [command]/opt/homebrew/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-02T06:50:58.1636700Z ##[endgroup]
+2026-09-02T06:50:58.1638810Z ##[group]Fetching the repository
+2026-09-02T06:50:58.1642130Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +988eb527299d86f5f3b8f814c1d0261c3c2c8978:refs/remotes/origin/main
+2026-09-02T06:50:58.6663380Z From https://github.com/sykeswzq/healthboost
+2026-09-02T06:50:58.6666640Z  * [new ref]         988eb527299d86f5f3b8f814c1d0261c3c2c8978 -> origin/main
+2026-09-02T06:50:58.6674210Z ##[endgroup]
+2026-09-02T06:50:58.6678410Z ##[group]Determining the checkout info
+2026-09-02T06:50:58.6679750Z ##[endgroup]
+2026-09-02T06:50:58.6680750Z [command]/opt/homebrew/bin/git sparse-checkout disable
+2026-09-02T06:50:58.6786290Z [command]/opt/homebrew/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-02T06:50:58.6921630Z ##[group]Checking out the ref
+2026-09-02T06:50:58.6923710Z [command]/opt/homebrew/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-09-02T06:50:58.7179890Z Switched to a new branch 'main'
+2026-09-02T06:50:58.7185820Z branch 'main' set up to track 'origin/main'.
+2026-09-02T06:50:58.7192090Z ##[endgroup]
+2026-09-02T06:50:58.7295820Z [command]/opt/homebrew/bin/git log -1 --format=%H
+2026-09-02T06:50:58.7393760Z 988eb527299d86f5f3b8f814c1d0261c3c2c8978
+2026-09-02T06:50:58.7414490Z ##[group]Removing auth
+2026-09-02T06:50:58.7417790Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-02T06:50:58.7490090Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-02T06:50:58.8961880Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-02T06:50:58.9001880Z http.https://github.com/.extraheader
+2026-09-02T06:50:58.9097530Z [command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-09-02T06:50:58.9183300Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-02T06:50:59.0435300Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-02T06:50:59.0563330Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-02T06:50:59.2359930Z ##[endgroup]
+2026-09-02T06:50:59.2798120Z ##[group]Run rm -rf ~/Library/Caches/org.llvm.clang/*/ModuleCache.noindex/
+2026-09-02T06:50:59.2798700Z [36;1mrm -rf ~/Library/Caches/org.llvm.clang/*/ModuleCache.noindex/[0m
+2026-09-02T06:50:59.2799100Z [36;1mrm -rf ~/Library/Developer/Xcode/DerivedData/[0m
+2026-09-02T06:50:59.2799380Z [36;1mecho "Cache cleared"[0m
+2026-09-02T06:50:59.3120010Z shell: /bin/bash -e {0}
+2026-09-02T06:50:59.3120250Z ##[endgroup]
+2026-09-02T06:50:59.3959790Z Cache cleared
+2026-09-02T06:50:59.4041160Z ##[group]Run brew install dpkg
+2026-09-02T06:50:59.4041960Z [36;1mbrew install dpkg[0m
+2026-09-02T06:50:59.4042530Z [36;1mbrew install ldid-procursus 2>/dev/null || brew install procursus/ldid/ldid 2>/dev/null || { echo "ERROR: ldid install failed"; exit 1; }[0m
+2026-09-02T06:50:59.4043640Z [36;1mcommand -v ldid >/dev/null 2>&1 || { echo "ERROR: ldid still not available"; exit 1; }[0m
+2026-09-02T06:50:59.4044400Z [36;1m(ldid -e "$(command -v true)" >/dev/null 2>&1 || ldid -h >/dev/null 2>&1) && echo "ldid OK" || echo "WARN: ldid self-test skipped (non-fatal)"[0m
+2026-09-02T06:50:59.4101700Z shell: /bin/bash -e {0}
+2026-09-02T06:50:59.4102030Z ##[endgroup]
+2026-09-02T06:51:02.8685490Z ##[warning]The following taps are not trusted:
+  aws/tap
+
+Homebrew is currently ignoring formulae, casks and commands from these taps because tap trust is required.
+
+Untap them with:
+  brew untap aws/tap
+Trust specific formulae, casks and commands with:
+  brew trust --formula <user>/<tap>/<formula>
+  brew trust --cask <user>/<tap>/<cask>
+  brew trust --command <user>/<tap>/<command>
+Whole-tap trust is broader and includes all current and future formulae,
+casks and commands from the listed taps. Trust whole taps with:
+  brew trust aws/tap
+To disable trust checks:
+  export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
+This is not recommended and will be removed in a later release.
+For more information, see:
+  https://docs.brew.sh/Tap-Trust
+2026-09-02T06:51:04.0663010Z [34m==>[0m [1mWould install 1 formula:[0m
+2026-09-02T06:51:04.0710390Z dpkg
+2026-09-02T06:51:04.0711660Z [34m==>[0m [1mDownloading https://ghcr.io/v2/homebrew/core/dpkg/manifests/1.23.7[0m
+2026-09-02T06:51:04.5801960Z [34m==>[0m [1mWould install 2 dependencies for dpkg:[0m
+2026-09-02T06:51:04.5803790Z gpatch
+2026-09-02T06:51:04.5928280Z libmd
+2026-09-02T06:51:04.5939370Z [32m==>[0m [1mFetching downloads for: [32mdpkg[39m[0m
+2026-09-02T06:51:04.8826870Z ✔︎ Bottle Manifest libmd (1.2.0)
+2026-09-02T06:51:04.9006890Z ✔︎ Bottle Manifest gpatch (2.8)
+2026-09-02T06:51:05.0073850Z ✔︎ Bottle gpatch (2.8)
+2026-09-02T06:51:05.0141840Z ✔︎ Bottle libmd (1.2.0)
+2026-09-02T06:51:05.4494650Z ✔︎ Bottle dpkg (1.23.7)
+2026-09-02T06:51:05.5185070Z [32m==>[0m [1mInstalling dependencies for dpkg:[0m [32mgpatch[39m and [32mlibmd[39m[0m
+2026-09-02T06:51:05.5187510Z [32m==>[0m [1mInstalling dpkg dependency: [32mgpatch[39m[0m
+2026-09-02T06:51:05.5198820Z [34m==>[0m [1mPouring gpatch--2.8.arm64_tahoe.bottle.tar.gz[0m
+2026-09-02T06:51:05.6788130Z 🍺  /opt/homebrew/Cellar/gpatch/2.8: 12 files, 395KB
+2026-09-02T06:51:05.6789630Z [32m==>[0m [1mInstalling dpkg dependency: [32mlibmd[39m[0m
+2026-09-02T06:51:05.6816050Z [34m==>[0m [1mPouring libmd--1.2.0.arm64_tahoe.bottle.tar.gz[0m
+2026-09-02T06:51:05.8601160Z 🍺  /opt/homebrew/Cellar/libmd/1.2.0: 138 files, 1MB
+2026-09-02T06:51:05.8610210Z [32m==>[0m [1mInstalling [32mdpkg[39m[0m
+2026-09-02T06:51:05.8610870Z [34m==>[0m [1mPouring dpkg--1.23.7.arm64_tahoe.bottle.tar.gz[0m
+2026-09-02T06:51:06.4518570Z [34m==>[0m [1mCaveats[0m
+2026-09-02T06:51:06.4519720Z This installation of dpkg is not configured to install software, so
+2026-09-02T06:51:06.4521620Z commands such as `dpkg -i`, `dpkg --configure` will fail.
+2026-09-02T06:51:06.4522800Z [34m==>[0m [1mSummary[0m
+2026-09-02T06:51:06.4717340Z 🍺  /opt/homebrew/Cellar/dpkg/1.23.7: 740 files, 18.3MB
+2026-09-02T06:51:06.4720530Z [32m==>[0m [1mCaveats[0m
+2026-09-02T06:51:06.4721510Z [34m==>[0m [1mdpkg[0m
+2026-09-02T06:51:06.4722640Z This installation of dpkg is not configured to install software, so
+2026-09-02T06:51:06.4723710Z commands such as `dpkg -i`, `dpkg --configure` will fail.
+2026-09-02T06:51:09.0184330Z [34m==>[0m [1mWould install 1 formula:[0m
+2026-09-02T06:51:09.0206590Z ldid-procursus
+2026-09-02T06:51:09.0218920Z [34m==>[0m [1mDownloading https://ghcr.io/v2/homebrew/core/ldid-procursus/manifests/2.1.5-procursus7_2[0m
+2026-09-02T06:51:09.4778040Z [34m==>[0m [1mWould install 1 dependency for ldid-procursus:[0m
+2026-09-02T06:51:09.4778970Z libplist
+2026-09-02T06:51:09.4779550Z [32m==>[0m [1mFetching downloads for: [32mldid-procursus[39m[0m
+2026-09-02T06:51:09.8903250Z [32m==>[0m [1mInstalling ldid-procursus dependency: [32mlibplist[39m[0m
+2026-09-02T06:51:09.8942410Z [34m==>[0m [1mPouring libplist--2.7.0.arm64_tahoe.bottle.tar.gz[0m
+2026-09-02T06:51:10.0477630Z 🍺  /opt/homebrew/Cellar/libplist/2.7.0: 32 files, 605.5KB
+2026-09-02T06:51:10.0579790Z [32m==>[0m [1mInstalling [32mldid-procursus[39m[0m
+2026-09-02T06:51:10.0655140Z [34m==>[0m [1mPouring ldid-procursus--2.1.5-procursus7_2.arm64_tahoe.bottle.tar.gz[0m
+2026-09-02T06:51:10.0921870Z 🍺  /opt/homebrew/Cellar/ldid-procursus/2.1.5-procursus7_2: 11 files, 296.2KB
+2026-09-02T06:51:10.1812880Z ldid OK
+2026-09-02T06:51:10.1894040Z ##[group]Run bash build.sh
+2026-09-02T06:51:10.1894340Z [36;1mbash build.sh[0m
+2026-09-02T06:51:10.1993940Z shell: /bin/bash -e {0}
+2026-09-02T06:51:10.1994700Z ##[endgroup]
+2026-09-02T06:51:10.2619090Z 版本号: 1.0.143-1
+2026-09-02T06:51:10.2621650Z [1/4] 创建 staging 目录（roothide 根相对 ./Applications）
+2026-09-02T06:51:12.3300250Z [2/4] 编译 iOS App (UCS.app) — arm64 + arm64e
+2026-09-02T06:51:20.1299240Z   app:   306496 bytes
+2026-09-02T06:51:20.1313310Z [3/4] 拷贝 App 资源 + ldid 签名
+2026-09-02T06:51:20.2249640Z   已用 ldid 重签 App
+2026-09-02T06:51:20.2483490Z   签名校验通过: healthkit + no-sandbox 均存在，Mach-O 头正常
+2026-09-02T06:51:20.2485140Z [4/4] 生成 control / postinst 并打包
+2026-09-02T06:51:20.2905380Z dpkg-deb: warning: root directory staging has unusual owner or group 501:20
+2026-09-02T06:51:20.2906440Z dpkg-deb: hint: you might need to pass --root-owner-group, see <https://wiki.debian.org/Teams/Dpkg/RootlessBuilds> for further details
+2026-09-02T06:51:20.2907490Z dpkg-deb: warning: ignoring 1 warning about the control file(s)
+2026-09-02T06:51:20.2914470Z dpkg-deb: building package 'com.sykes.ucs' in 'com.sykes.ucs_1.0.143-1_iphoneos-arm64e.deb'.
+2026-09-02T06:51:20.3607920Z   -> 71K bytes
+2026-09-02T06:51:20.3609430Z DONE(APP): com.sykes.ucs_1.0.143-1_iphoneos-arm64e.deb
+2026-09-02T06:51:20.3619640Z [5/5] 编译 StepFaker tweak dylib (arm64 + arm64e)
+2026-09-02T06:51:21.6428090Z   tweak dylib:   172008 bytes
+2026-09-02T06:51:21.6480820Z   拷贝 filter plist
+2026-09-02T06:51:21.6665910Z   已用 ldid 签名 tweak dylib
+2026-09-02T06:51:21.6718020Z   tweak 签名校验通过: Mach-O 头正常
+2026-09-02T06:51:21.7098820Z dpkg-deb: warning: root directory tweak_staging has unusual owner or group 501:20
+2026-09-02T06:51:21.7101240Z dpkg-deb: hint: you might need to pass --root-owner-group, see <https://wiki.debian.org/Teams/Dpkg/RootlessBuilds> for further details
+2026-09-02T06:51:21.7107150Z dpkg-deb: warning: ignoring 1 warning about the control file(s)
+2026-09-02T06:51:21.7109410Z dpkg-deb: building package 'com.sykes.stepfaker' in 'com.sykes.stepfaker_1.0.143-1_iphoneos-arm64e.deb'.
+2026-09-02T06:51:21.7588290Z   -> 23K bytes
+2026-09-02T06:51:21.7591090Z DONE(TWEAK): com.sykes.stepfaker_1.0.143-1_iphoneos-arm64e.deb
+2026-09-02T06:51:21.7941450Z ##[group]Run set -e
+2026-09-02T06:51:21.7941900Z [36;1mset -e[0m
+2026-09-02T06:51:21.7942250Z [36;1mDEB=$(ls com.sykes.healthboost_*_iphoneos-arm64e.deb | head -1)[0m
+2026-09-02T06:51:21.8091460Z [36;1mecho "deb file: $DEB"[0m
+2026-09-02T06:51:21.8092270Z [36;1m[0m
+2026-09-02T06:51:21.8092840Z [36;1mecho "=== (1) deb 内路径必须是根相对 ./Applications/（roothide 范式）==="[0m
+2026-09-02T06:51:21.8093780Z [36;1m# 用 dpkg-deb -c 列出内容；若存在 ./var/jb 或 ./var/roothide 前缀则视为错误[0m
+2026-09-02T06:51:21.8094680Z [36;1mif dpkg-deb -c "$DEB" | grep -E '\./var/(jb|roothide)/' ; then[0m
+2026-09-02T06:51:21.8096120Z [36;1m  echo "ERROR: 检测到 ./var/jb 或 ./var/roothide 前缀路径，roothide 上 dpkg 会报 No such file"[0m
+2026-09-02T06:51:21.8097200Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8097630Z [36;1mfi[0m
+2026-09-02T06:51:21.8098410Z [36;1mif ! dpkg-deb -c "$DEB" | grep -E '\./Applications/HealthBoost\.app/HealthBoostApp' ; then[0m
+2026-09-02T06:51:21.8099950Z [36;1m  echo "ERROR: 未找到 ./Applications/HealthBoost.app/HealthBoostApp，打包路径错误"[0m
+2026-09-02T06:51:21.8102200Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8102490Z [36;1mfi[0m
+2026-09-02T06:51:21.8102680Z [36;1mecho "  (1) OK: 路径为根相对 ./Applications/"[0m
+2026-09-02T06:51:21.8102910Z [36;1m[0m
+2026-09-02T06:51:21.8103090Z [36;1mecho "=== (2) 展开校验二进制签名/entitlements ==="[0m
+2026-09-02T06:51:21.8103400Z [36;1mrm -rf /tmp/hbcheck && mkdir -p /tmp/hbcheck[0m
+2026-09-02T06:51:21.8103690Z [36;1mdpkg-deb -x "$DEB" /tmp/hbcheck[0m
+2026-09-02T06:51:21.8104150Z [36;1mAPPBIN=/tmp/hbcheck/Applications/HealthBoost.app/HealthBoostApp[0m
+2026-09-02T06:51:21.8104660Z [36;1mif [ ! -f "$APPBIN" ]; then[0m
+2026-09-02T06:51:21.8104890Z [36;1m  echo "ERROR: 解包后找不到 $APPBIN"[0m
+2026-09-02T06:51:21.8105110Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8105350Z [36;1mfi[0m
+2026-09-02T06:51:21.8105500Z [36;1m[0m
+2026-09-02T06:51:21.8105720Z [36;1mecho "  (2a) Mach-O 头必须是 fat (cafebabe)"[0m
+2026-09-02T06:51:21.8106100Z [36;1mmagic=$(xxd -p -l4 "$APPBIN" | tr -d '\n')[0m
+2026-09-02T06:51:21.8106450Z [36;1mif [ "$magic" != "cafebabe" ]; then[0m
+2026-09-02T06:51:21.8106740Z [36;1m  echo "ERROR: 二进制 Mach-O 头异常 (magic=$magic)，签名/打包损坏"[0m
+2026-09-02T06:51:21.8107160Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8107460Z [36;1mfi[0m
+2026-09-02T06:51:21.8107620Z [36;1mecho "  (2a) OK: magic=$magic"[0m
+2026-09-02T06:51:21.8107810Z [36;1m[0m
+2026-09-02T06:51:21.8108030Z [36;1mecho "  (2b) entitlements 必须含 no-sandbox 与 healthkit"[0m
+2026-09-02T06:51:21.8108330Z [36;1mENT=$(ldid -e "$APPBIN" 2>/dev/null || true)[0m
+2026-09-02T06:51:21.8108700Z [36;1mif ! echo "$ENT" | grep -q "no-sandbox"; then[0m
+2026-09-02T06:51:21.8109270Z [36;1m  echo "ERROR: 签名缺少 com.apple.private.security.no-sandbox（roothide 必需）"[0m
+2026-09-02T06:51:21.8109600Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8109740Z [36;1mfi[0m
+2026-09-02T06:51:21.8110040Z [36;1mif ! echo "$ENT" | grep -q "healthkit"; then[0m
+2026-09-02T06:51:21.8110390Z [36;1m  echo "ERROR: 签名缺少 healthkit 权限（App 无法写入健康数据）"[0m
+2026-09-02T06:51:21.8110770Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8111020Z [36;1mfi[0m
+2026-09-02T06:51:21.8112140Z [36;1mecho "  (2b) OK: no-sandbox + healthkit 均存在"[0m
+2026-09-02T06:51:21.8112440Z [36;1m[0m
+2026-09-02T06:51:21.8112590Z [36;1mecho "=== (3) Info.plist 关键字段 ==="[0m
+2026-09-02T06:51:21.8112890Z [36;1mPLIST=/tmp/hbcheck/Applications/HealthBoost.app/Info.plist[0m
+2026-09-02T06:51:21.8113560Z [36;1mif ! /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST" 2>/dev/null | grep -q "HealthBoostApp"; then[0m
+2026-09-02T06:51:21.8114190Z [36;1m  echo "ERROR: Info.plist CFBundleExecutable 不是 HealthBoostApp"[0m
+2026-09-02T06:51:21.8114630Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8114770Z [36;1mfi[0m
+2026-09-02T06:51:21.8114980Z [36;1m# 不应引用不存在的 storyboard[0m
+2026-09-02T06:51:21.8115450Z [36;1mif /usr/libexec/PlistBuddy -c "Print :UIMainStoryboardFile" "$PLIST" 2>/dev/null | grep -q "Main"; then[0m
+2026-09-02T06:51:21.8116540Z [36;1m  echo "ERROR: Info.plist 引用了不存在的 Main.storyboard"[0m
+2026-09-02T06:51:21.8116940Z [36;1m  exit 1[0m
+2026-09-02T06:51:21.8117420Z [36;1mfi[0m
+2026-09-02T06:51:21.8117810Z [36;1mecho "  (3) OK: CFBundleExecutable=HealthBoostApp，无 storyboard 引用"[0m
+2026-09-02T06:51:21.8118230Z [36;1m[0m
+2026-09-02T06:51:21.8118450Z [36;1mecho "=== 全部校验通过，可安全发布 ==="[0m
+2026-09-02T06:51:21.8181550Z shell: /bin/bash -e {0}
+2026-09-02T06:51:21.8181850Z ##[endgroup]
+2026-09-02T06:51:21.9051890Z ls: com.sykes.healthboost_*_iphoneos-arm64e.deb: No such file or directory
+2026-09-02T06:51:21.9061930Z deb file: 
+2026-09-02T06:51:21.9063130Z === (1) deb 内路径必须是根相对 ./Applications/（roothide 范式）===
+2026-09-02T06:51:21.9172240Z dpkg-deb: error: failed to read archive «»: No such file or directory
+2026-09-02T06:51:21.9283470Z dpkg-deb: error: failed to read archive «»: No such file or directory
+2026-09-02T06:51:21.9287410Z ERROR: 未找到 ./Applications/HealthBoost.app/HealthBoostApp，打包路径错误
+2026-09-02T06:51:21.9299840Z ##[error]Process completed with exit code 1.
+2026-09-02T06:51:21.9499490Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-02T06:51:21.9501190Z Post job cleanup.
+2026-09-02T06:51:22.5210670Z [command]/opt/homebrew/bin/git version
+2026-09-02T06:51:22.5512650Z git version 2.55.0
+2026-09-02T06:51:22.5563080Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/88318c23-bea3-4e30-9ffe-1f81964e1f50/.gitconfig'
+2026-09-02T06:51:22.5570080Z Temporarily overriding HOME='/Users/runner/work/_temp/88318c23-bea3-4e30-9ffe-1f81964e1f50' before making global git config changes
+2026-09-02T06:51:22.5571020Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-02T06:51:22.5593130Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/healthboost/healthboost
+2026-09-02T06:51:22.5733020Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-02T06:51:22.5813260Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-02T06:51:22.7417090Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-02T06:51:22.7520290Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-02T06:51:22.9201510Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-02T06:51:22.9506190Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-02T06:51:23.1492160Z Cleaning up orphan processes
+2026-09-02T06:51:24.4926820Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

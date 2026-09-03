@@ -1,11 +1,11 @@
-Package: com.sykes.healthboost
-Name: HealthBoost
+Package: com.sykes.ucs
+Name: UCS
 Version: 1.0.0-1
 Architecture: iphoneos-arm64e
 Installed-Size: 45056
 Depends: firmware (>= 13.0), libsubstrate (>= 0.9.6301)
 Maintainer: sykeswzq
 Author: sykeswzq
-Description: Modifies Apple Health data (steps, distance, flights climbed).
+Description: UCS - modifies Apple Health data (steps, distance, flights climbed).
  Section: utilities
  Priority: optional

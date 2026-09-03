@@ -18,6 +18,7 @@ FILES = {
     "tweak/StepFaker.m": r"C:\Users\Administrator\Desktop\1\HealthBoost\tweak\StepFaker.m",
     "tweak/StepFaker.plist": r"C:\Users\Administrator\Desktop\1\HealthBoost\tweak\StepFaker.plist",
     "HealthBoostApp/HealthBoostApp.m": r"C:\Users\Administrator\Desktop\1\HealthBoost\HealthBoostApp\HealthBoostApp.m",
+    "HealthBoostApp/AppDelegate.m": r"C:\Users\Administrator\Desktop\1\HealthBoost\HealthBoostApp\AppDelegate.m",
     "HealthBoostApp/HealthBoost/Info.plist": r"C:\Users\Administrator\Desktop\1\HealthBoost\HealthBoostApp\HealthBoost\Info.plist",
     "build.sh": r"C:\Users\Administrator\Desktop\1\HealthBoost\build.sh",
     "debian/control": r"C:\Users\Administrator\Desktop\1\HealthBoost\debian\control",
@@ -56,7 +57,7 @@ new_tree_sha = tree["sha"]
 print("new tree", new_tree_sha)
 
 # 4) create commit
-msg = "UCS rebrand + Alipay APStepInfo hook + daily schedule UI"
+msg = "v1.0.164 fix: diagnose Alipay injection (dylib not loading into Alipay) - precise bundle-id filter + Mode Any, fix fake-steps shared-channel read, add injection probe (/var/mobile/Documents/hb_inject.log) + App-side Alipay bundle/exec detector (hb_log.txt [DIAG])"
 st, newcommit = api("POST", "%s/git/commits" % API, {
     "message": msg,
     "tree": new_tree_sha,

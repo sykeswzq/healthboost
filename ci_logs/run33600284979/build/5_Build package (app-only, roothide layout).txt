@@ -1,0 +1,33 @@
+﻿2026-09-02T06:45:38.5991400Z ##[group]Run bash build.sh
+2026-09-02T06:45:38.5991710Z [36;1mbash build.sh[0m
+2026-09-02T06:45:38.6025220Z shell: /bin/bash -e {0}
+2026-09-02T06:45:38.6025570Z ##[endgroup]
+2026-09-02T06:45:38.6465690Z 版本号: 1.0.141-1
+2026-09-02T06:45:38.6467300Z [1/4] 创建 staging 目录（roothide 根相对 ./Applications）
+2026-09-02T06:45:40.2366770Z [2/4] 编译 iOS App (HealthBoost.app) — arm64 + arm64e
+2026-09-02T06:45:42.7780020Z HealthBoostApp/HealthBoostApp.m:529:34: warning: 'UIDatePickerStyleWheels' is only available on iOS 13.4 or newer [-Wunguarded-availability-new]
+2026-09-02T06:45:42.7780990Z   529 |     p.preferredDatePickerStyle = UIDatePickerStyleWheels;
+2026-09-02T06:45:42.7781410Z       |                                  ^~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:45:42.7782400Z /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/UIKit.framework/Headers/UIDatePicker.h:28:28: note: 'UIDatePickerStyle' has been marked as being introduced in iOS 13.4 here, but the deployment target is iOS 13.0.0
+2026-09-02T06:45:42.7783570Z    28 | typedef NS_ENUM(NSInteger, UIDatePickerStyle) {
+2026-09-02T06:45:42.7783840Z       |                            ^
+2026-09-02T06:45:42.7799290Z HealthBoostApp/HealthBoostApp.m:529:34: note: enclose 'UIDatePickerStyleWheels' in an @available check to silence this warning
+2026-09-02T06:45:42.7804630Z   529 |     p.preferredDatePickerStyle = UIDatePickerStyleWheels;
+2026-09-02T06:45:42.7805000Z       |                                  ^~~~~~~~~~~~~~~~~~~~~~~ 
+2026-09-02T06:45:42.7805710Z HealthBoostApp/HealthBoostApp.m:529:7: warning: 'setPreferredDatePickerStyle:' is only available on iOS 13.4 or newer [-Wunguarded-availability-new]
+2026-09-02T06:45:42.7806500Z   529 |     p.preferredDatePickerStyle = UIDatePickerStyleWheels;
+2026-09-02T06:45:42.7806790Z       |       ^~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:45:42.7807850Z /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/UIKit.framework/Headers/UIDatePicker.h:57:60: note: 'setPreferredDatePickerStyle:' has been marked as being introduced in iOS 13.4 here, but the deployment target is iOS 13.0.0
+2026-09-02T06:45:42.7809170Z    57 | @property (nonatomic, readwrite, assign) UIDatePickerStyle preferredDatePickerStyle API_AVAILABLE(ios(13.4)) API_UNAVAILABLE(tvos, watchos);
+2026-09-02T06:45:42.7809780Z       |                                                            ^
+2026-09-02T06:45:42.7810340Z HealthBoostApp/HealthBoostApp.m:529:7: note: enclose 'setPreferredDatePickerStyle:' in an @available check to silence this warning
+2026-09-02T06:45:42.7811030Z   529 |     p.preferredDatePickerStyle = UIDatePickerStyleWheels;
+2026-09-02T06:45:42.7811740Z       |       ^~~~~~~~~~~~~~~~~~~~~~~~                           
+2026-09-02T06:45:42.7818160Z HealthBoostApp/HealthBoostApp.m:556:64: error: no visible @interface for 'UNUserNotificationCenter' declares the selector 'removePendingNotificationRequestsWithIdentifier:'
+2026-09-02T06:45:42.7821210Z   556 |     else [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifier:@"UCSDailyGen"];
+2026-09-02T06:45:42.7823070Z       |           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:45:42.7825120Z HealthBoostApp/HealthBoostApp.m:562:8: error: no visible @interface for 'UNUserNotificationCenter' declares the selector 'removePendingNotificationRequestsWithIdentifier:'
+2026-09-02T06:45:42.7827140Z   562 |     [c removePendingNotificationRequestsWithIdentifier:@"UCSDailyGen"];
+2026-09-02T06:45:42.7828260Z       |      ~ ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-02T06:45:42.7909550Z 2 warnings and 2 errors generated.
+2026-09-02T06:45:43.9113750Z ##[error]Process completed with exit code 1.

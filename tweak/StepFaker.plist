@@ -4,6 +4,8 @@
 <dict>
     <key>Filter</key>
     <dict>
+        <key>Mode</key>
+        <string>Any</string>
         <key>Bundles</key>
         <array>
             <string>com.tencent.xin</string>
@@ -11,8 +13,8 @@
         </array>
         <key>Executables</key>
         <array>
-            <string>AlipayWallet</string>
             <string>WeChat</string>
+            <string>AlipayWallet</string>
         </array>
     </dict>
 </dict>

@@ -1,0 +1,7 @@
+﻿2026-09-02T06:47:18.1562670Z ##[group]Run rm -rf ~/Library/Caches/org.llvm.clang/*/ModuleCache.noindex/
+2026-09-02T06:47:18.1563330Z [36;1mrm -rf ~/Library/Caches/org.llvm.clang/*/ModuleCache.noindex/[0m
+2026-09-02T06:47:18.1563910Z [36;1mrm -rf ~/Library/Developer/Xcode/DerivedData/[0m
+2026-09-02T06:47:18.1564220Z [36;1mecho "Cache cleared"[0m
+2026-09-02T06:47:18.1608860Z shell: /bin/bash -e {0}
+2026-09-02T06:47:18.1609200Z ##[endgroup]
+2026-09-02T06:47:18.2096200Z Cache cleared

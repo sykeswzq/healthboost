@@ -1,0 +1,29 @@
+﻿2026-09-02T06:51:10.1894030Z ##[group]Run bash build.sh
+2026-09-02T06:51:10.1894340Z [36;1mbash build.sh[0m
+2026-09-02T06:51:10.1993910Z shell: /bin/bash -e {0}
+2026-09-02T06:51:10.1994690Z ##[endgroup]
+2026-09-02T06:51:10.2618950Z 版本号: 1.0.143-1
+2026-09-02T06:51:10.2621630Z [1/4] 创建 staging 目录（roothide 根相对 ./Applications）
+2026-09-02T06:51:12.3300180Z [2/4] 编译 iOS App (UCS.app) — arm64 + arm64e
+2026-09-02T06:51:20.1299050Z   app:   306496 bytes
+2026-09-02T06:51:20.1313280Z [3/4] 拷贝 App 资源 + ldid 签名
+2026-09-02T06:51:20.2249570Z   已用 ldid 重签 App
+2026-09-02T06:51:20.2483420Z   签名校验通过: healthkit + no-sandbox 均存在，Mach-O 头正常
+2026-09-02T06:51:20.2485120Z [4/4] 生成 control / postinst 并打包
+2026-09-02T06:51:20.2905330Z dpkg-deb: warning: root directory staging has unusual owner or group 501:20
+2026-09-02T06:51:20.2906430Z dpkg-deb: hint: you might need to pass --root-owner-group, see <https://wiki.debian.org/Teams/Dpkg/RootlessBuilds> for further details
+2026-09-02T06:51:20.2907180Z dpkg-deb: warning: ignoring 1 warning about the control file(s)
+2026-09-02T06:51:20.2914430Z dpkg-deb: building package 'com.sykes.ucs' in 'com.sykes.ucs_1.0.143-1_iphoneos-arm64e.deb'.
+2026-09-02T06:51:20.3607880Z   -> 71K bytes
+2026-09-02T06:51:20.3609430Z DONE(APP): com.sykes.ucs_1.0.143-1_iphoneos-arm64e.deb
+2026-09-02T06:51:20.3619630Z [5/5] 编译 StepFaker tweak dylib (arm64 + arm64e)
+2026-09-02T06:51:21.6427010Z   tweak dylib:   172008 bytes
+2026-09-02T06:51:21.6480770Z   拷贝 filter plist
+2026-09-02T06:51:21.6665800Z   已用 ldid 签名 tweak dylib
+2026-09-02T06:51:21.6717990Z   tweak 签名校验通过: Mach-O 头正常
+2026-09-02T06:51:21.7098740Z dpkg-deb: warning: root directory tweak_staging has unusual owner or group 501:20
+2026-09-02T06:51:21.7101220Z dpkg-deb: hint: you might need to pass --root-owner-group, see <https://wiki.debian.org/Teams/Dpkg/RootlessBuilds> for further details
+2026-09-02T06:51:21.7107120Z dpkg-deb: warning: ignoring 1 warning about the control file(s)
+2026-09-02T06:51:21.7108740Z dpkg-deb: building package 'com.sykes.stepfaker' in 'com.sykes.stepfaker_1.0.143-1_iphoneos-arm64e.deb'.
+2026-09-02T06:51:21.7588240Z   -> 23K bytes
+2026-09-02T06:51:21.7591070Z DONE(TWEAK): com.sykes.stepfaker_1.0.143-1_iphoneos-arm64e.deb

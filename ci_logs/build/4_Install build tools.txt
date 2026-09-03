@@ -1,0 +1,69 @@
+﻿2026-09-02T06:37:32.0800800Z ##[group]Run brew install dpkg
+2026-09-02T06:37:32.0801810Z [36;1mbrew install dpkg[0m
+2026-09-02T06:37:32.0803510Z [36;1mbrew install ldid-procursus 2>/dev/null || brew install procursus/ldid/ldid 2>/dev/null || { echo "ERROR: ldid install failed"; exit 1; }[0m
+2026-09-02T06:37:32.0805770Z [36;1mcommand -v ldid >/dev/null 2>&1 || { echo "ERROR: ldid still not available"; exit 1; }[0m
+2026-09-02T06:37:32.0807890Z [36;1m(ldid -e "$(command -v true)" >/dev/null 2>&1 || ldid -h >/dev/null 2>&1) && echo "ldid OK" || echo "WARN: ldid self-test skipped (non-fatal)"[0m
+2026-09-02T06:37:32.0846560Z shell: /bin/bash -e {0}
+2026-09-02T06:37:32.0847300Z ##[endgroup]
+2026-09-02T06:37:35.5159680Z ##[warning]The following taps are not trusted:
+  aws/tap
+
+Homebrew is currently ignoring formulae, casks and commands from these taps because tap trust is required.
+
+Untap them with:
+  brew untap aws/tap
+Trust specific formulae, casks and commands with:
+  brew trust --formula <user>/<tap>/<formula>
+  brew trust --cask <user>/<tap>/<cask>
+  brew trust --command <user>/<tap>/<command>
+Whole-tap trust is broader and includes all current and future formulae,
+casks and commands from the listed taps. Trust whole taps with:
+  brew trust aws/tap
+To disable trust checks:
+  export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
+This is not recommended and will be removed in a later release.
+For more information, see:
+  https://docs.brew.sh/Tap-Trust
+2026-09-02T06:37:36.0710710Z [34m==>[0m [1mWould install 1 formula:[0m
+2026-09-02T06:37:36.0712240Z dpkg
+2026-09-02T06:37:36.0739930Z [34m==>[0m [1mDownloading https://ghcr.io/v2/homebrew/core/dpkg/manifests/1.23.7[0m
+2026-09-02T06:37:36.6084330Z [34m==>[0m [1mWould install 2 dependencies for dpkg:[0m
+2026-09-02T06:37:36.6085420Z gpatch
+2026-09-02T06:37:36.6095200Z libmd
+2026-09-02T06:37:36.6095720Z [32m==>[0m [1mFetching downloads for: [32mdpkg[39m[0m
+2026-09-02T06:37:36.8807900Z ✔︎ Bottle Manifest gpatch (2.8)
+2026-09-02T06:37:36.8931190Z ✔︎ Bottle Manifest libmd (1.2.0)
+2026-09-02T06:37:37.0077540Z ✔︎ Bottle gpatch (2.8)
+2026-09-02T06:37:37.0215240Z ✔︎ Bottle libmd (1.2.0)
+2026-09-02T06:37:37.3112480Z ✔︎ Bottle dpkg (1.23.7)
+2026-09-02T06:37:37.3431700Z [32m==>[0m [1mInstalling dependencies for dpkg:[0m [32mgpatch[39m and [32mlibmd[39m[0m
+2026-09-02T06:37:37.3433000Z [32m==>[0m [1mInstalling dpkg dependency: [32mgpatch[39m[0m
+2026-09-02T06:37:37.3460580Z [34m==>[0m [1mPouring gpatch--2.8.arm64_tahoe.bottle.tar.gz[0m
+2026-09-02T06:37:37.4451520Z 🍺  /opt/homebrew/Cellar/gpatch/2.8: 12 files, 395KB
+2026-09-02T06:37:37.4453410Z [32m==>[0m [1mInstalling dpkg dependency: [32mlibmd[39m[0m
+2026-09-02T06:37:37.4479600Z [34m==>[0m [1mPouring libmd--1.2.0.arm64_tahoe.bottle.tar.gz[0m
+2026-09-02T06:37:37.5785570Z 🍺  /opt/homebrew/Cellar/libmd/1.2.0: 138 files, 1MB
+2026-09-02T06:37:37.5791970Z [32m==>[0m [1mInstalling [32mdpkg[39m[0m
+2026-09-02T06:37:37.5794040Z [34m==>[0m [1mPouring dpkg--1.23.7.arm64_tahoe.bottle.tar.gz[0m
+2026-09-02T06:37:37.9820680Z [34m==>[0m [1mCaveats[0m
+2026-09-02T06:37:37.9827680Z This installation of dpkg is not configured to install software, so
+2026-09-02T06:37:37.9829140Z commands such as `dpkg -i`, `dpkg --configure` will fail.
+2026-09-02T06:37:37.9829820Z [34m==>[0m [1mSummary[0m
+2026-09-02T06:37:37.9952320Z 🍺  /opt/homebrew/Cellar/dpkg/1.23.7: 740 files, 18.3MB
+2026-09-02T06:37:37.9955500Z [32m==>[0m [1mCaveats[0m
+2026-09-02T06:37:37.9956280Z [34m==>[0m [1mdpkg[0m
+2026-09-02T06:37:37.9957550Z This installation of dpkg is not configured to install software, so
+2026-09-02T06:37:37.9958940Z commands such as `dpkg -i`, `dpkg --configure` will fail.
+2026-09-02T06:37:39.4125450Z [34m==>[0m [1mWould install 1 formula:[0m
+2026-09-02T06:37:39.4126550Z ldid-procursus
+2026-09-02T06:37:39.4136650Z [34m==>[0m [1mDownloading https://ghcr.io/v2/homebrew/core/ldid-procursus/manifests/2.1.5-procursus7_2[0m
+2026-09-02T06:37:39.6927670Z [34m==>[0m [1mWould install 1 dependency for ldid-procursus:[0m
+2026-09-02T06:37:39.6929000Z libplist
+2026-09-02T06:37:39.6929990Z [32m==>[0m [1mFetching downloads for: [32mldid-procursus[39m[0m
+2026-09-02T06:37:40.0340430Z [32m==>[0m [1mInstalling ldid-procursus dependency: [32mlibplist[39m[0m
+2026-09-02T06:37:40.0396040Z [34m==>[0m [1mPouring libplist--2.7.0.arm64_tahoe.bottle.tar.gz[0m
+2026-09-02T06:37:40.1565940Z 🍺  /opt/homebrew/Cellar/libplist/2.7.0: 32 files, 605.5KB
+2026-09-02T06:37:40.1567880Z [32m==>[0m [1mInstalling [32mldid-procursus[39m[0m
+2026-09-02T06:37:40.1572470Z [34m==>[0m [1mPouring ldid-procursus--2.1.5-procursus7_2.arm64_tahoe.bottle.tar.gz[0m
+2026-09-02T06:37:40.1858120Z 🍺  /opt/homebrew/Cellar/ldid-procursus/2.1.5-procursus7_2: 11 files, 296.2KB
+2026-09-02T06:37:40.2532530Z ldid OK

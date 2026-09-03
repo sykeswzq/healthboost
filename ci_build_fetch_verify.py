@@ -58,13 +58,15 @@ for d in debs:
     files=deb_files(os.path.join(ext,d))
     print("\n--",d)
     for k in sorted(files): print("   ",k,len(files[k]))
-    if d.startswith("com.sykes.ucs_"):
-        pl=files.get("./Applications/UCS.app/Info.plist",b"")
+    # App 校验（单 deb 内含 UCS.app）
+    if "./Applications/UCS.app/Info.plist" in files:
+        pl=files["./Applications/UCS.app/Info.plist"]
         for key in ["CFBundleIdentifier","CFBundleDisplayName"]:
             mm=re.search(r"<key>%s</key>\s*<string>(.*?)</string>"%key,pl.decode("utf-8","replace"))
             print("   %s=%s"%(key,mm.group(1) if mm else "MISSING"))
-    if d.startswith("com.sykes.stepfaker_"):
-        dy=files.get("./Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib",b"")
+    # tweak 校验（单 deb 模式下 dylib/plist 也打进同一个 deb）
+    dy=files.get("./Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib",b"")
+    if dy:
         for s in [b"ALIPAY_HOOK_INSTALLED", b"ALIPAY_SETTER_HOOKED", b"MSHookMessageEx", b"APStepInfo", b"numberOfSteps", b"setNumberOfSteps:", b"CMPedometerData",
                   b"P0_ENTER dylib constructor entered", b"P1_SAFEMODE=", b"P2_PROG=", b"P3_SUBSTRATE=",
                   b"P4_ALIPAY minimal footprint", b"P9_DONE_ALIPAY", b"/var/mobile/hb_nohook", b"hb_probe_raw.log"]:
