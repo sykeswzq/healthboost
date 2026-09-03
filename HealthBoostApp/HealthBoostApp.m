@@ -446,24 +446,50 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     HBLog(@"[UCS] App 启动");
 }
 
+// 持久化「已请求过通知授权」标记：
+//  - NSUserDefaults 能扛住「关闭 App 重开」（进程内存会被重置，所以不能用 static）
+//  - 额外写一份到 /var/mobile/Documents/ 做跨重装/重签备份（App 容器在重装时会被清空）
+// 两者任一存在即视为「已询问过」，后续不再弹窗，彻底解决「允许后重开/重装仍反复弹」的问题。
+static NSString *HBNotifFlagPath(void) {
+    return @"/var/mobile/Documents/.hb_notif_requested";
+}
+- (BOOL)hbHasRequestedNotification {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"hb_notif_requested"]) return YES;
+    return [[NSFileManager defaultManager] fileExistsAtPath:HBNotifFlagPath()];
+}
+- (void)hbMarkNotificationRequested {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud setBool:YES forKey:@"hb_notif_requested"];
+    [ud synchronize];
+    NSString *p = HBNotifFlagPath();
+    if (![[NSFileManager defaultManager] fileExistsAtPath:p]) {
+        [@"1" writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+}
+
 - (void)setupNotifications {
     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
     c.delegate = self;
-    static BOOL didRequest = NO;   // 进程内一次性守卫：无论如何只请求一次
-    // 仅当授权状态为「未决定」时才弹请求框；已授权/已拒绝都不再重复弹。
+    // 仅当授权状态为「未决定」且「历史上从未请求过」时才弹请求框；
+    // 已授权/已拒绝/临时授权，或曾经询问过，都不再重复弹。
     [c getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings){
         UNAuthorizationStatus st = settings.authorizationStatus;
         HBLog(@"[UCS] 通知权限状态=%ld (0=NotDetermined 1=Denied 2=Authorized 3=Provisional 4=Ephemeral)",
               (long)st);
-        if (st == UNAuthorizationStatusNotDetermined && !didRequest) {
-            didRequest = YES;
-            [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound|UNAuthorizationOptionBadge
-                            completionHandler:^(BOOL g, NSError *e){
-                HBLog(@"[UCS] 通知授权结果 granted=%d err=%@", g, e ? e.localizedDescription : @"nil");
-            }];
-        } else {
-            HBLog(@"[UCS] 通知已决定(非NotDetermined)或已请求过，跳过弹窗");
+        if (st != UNAuthorizationStatusNotDetermined) {
+            HBLog(@"[UCS] 通知已决定(非NotDetermined)，跳过弹窗");
+            return;
         }
+        if ([self hbHasRequestedNotification]) {
+            HBLog(@"[UCS] 历史已请求过通知授权(标记存在)，跳过重复弹窗");
+            return;
+        }
+        [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound|UNAuthorizationOptionBadge
+                        completionHandler:^(BOOL g, NSError *e){
+            HBLog(@"[UCS] 通知授权结果 granted=%d err=%@", g, e ? e.localizedDescription : @"nil");
+            // 无论允许或拒绝，都写入标记：本次已询问过，后续不再重复弹
+            [self hbMarkNotificationRequested];
+        }];
     }];
 }
 
