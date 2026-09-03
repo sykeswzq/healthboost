@@ -47,6 +47,11 @@
 typedef void (*HBMSHookMessageExFn)(Class cls, SEL sel, IMP hook, IMP *old);
 static HBMSHookMessageExFn HBMSHook = NULL;
 
+// 宿主进程标识。支付宝的整套 hook（含方案 A 的动态兜底）只允许在支付宝进程里装。
+// 微信分支末尾也会调到 StepFakerTryHookAlipay()，没有这个闸门的话，
+// 动态扫描会把微信自己的类当成「App 自有类」一并 hook —— 那是 1.0.166 微信闪退的根因。
+static int g_isAlipay = 0;
+
 // 统一的安全 hook 入口。成功返回 YES，并回填原实现到 origOut。
 static BOOL HBHookInstance(Class cls, SEL sel, IMP replacement, IMP *origOut) {
     if (!cls) return NO;
@@ -592,6 +597,30 @@ static BOOL HBDynHasSetter(Class c) {
     for (int i = 0; i < g_dynSetterCount; i++) if (g_dynSetters[i].cls == c) return YES;
     return NO;
 }
+
+// 名称白名单：动态兜底只认「名字里带步数语义」的类。
+// 单靠方法签名（numberOfSteps 返回 long long）去筛，在支付宝这种体量的 App 里
+// 会命中一堆完全无关的类，挂上假步数 getter 后返回 15183 这种值，越界就崩
+// （1.0.166 的微信闪退就是这个机理）。加上名称过滤后，
+// 抗改名能力基本不变（改名后仍会带 Step/Walk/Sport 等词根），误伤面却小得多。
+static BOOL HBDynClassNameLooksLikeSteps(Class c) {
+    if (!c) return NO;
+    const char *n = class_getName(c);
+    if (!n) return NO;
+    // 转小写后匹配，避免大小写差异
+    size_t len = strlen(n);
+    char lower[256];
+    if (len >= sizeof(lower)) len = sizeof(lower) - 1;
+    for (size_t i = 0; i < len; i++) {
+        lower[i] = (n[i] >= 'A' && n[i] <= 'Z') ? (char)(n[i] + 32) : n[i];
+    }
+    lower[len] = '\0';
+    static const char *keys[] = { "step", "walk", "sport", "pedometer", "health", "motion", NULL };
+    for (int i = 0; keys[i]; i++) {
+        if (strstr(lower, keys[i]) != NULL) return YES;
+    }
+    return NO;
+}
 static long long new_dynApSteps(id self, SEL _cmd) {
     NSInteger fake = HBReadFakeSteps();
     if (fake > 0) {
@@ -693,6 +722,20 @@ static void StepFakerTryHookAlipay(void) {
     static int  retries = 0;
     static BOOL a1Done  = NO;
 
+    // ===== 闸门：非支付宝进程一律不装任何支付宝 hook =====
+    // 微信里没有 APStepInfo，但「动态扫描 + 按签名 hook」这套逻辑是通用的，
+    // 不加闸门它会把微信自己的类全扫出来挂上假步数 getter，返回 15183 这类值直接越界崩溃。
+    if (!g_isAlipay) {
+        if (retries == 0) {
+            HBRawLog("ALIPAY_SKIPPED: host is not Alipay (g_isAlipay=0), no Alipay hook installed");
+        }
+        return;
+    }
+
+    // 单独熔断：touch /var/mobile/hb_nodyn 后，只保留硬编码的 APStepInfo，
+    // 关掉方案 A2/A3 的动态兜底 hook（万一支付宝里也有类被误伤时用）。
+    int noDyn = (access("/var/mobile/hb_nodyn", F_OK) == 0);
+
     // ===== 方案 B：全量类扫描，把「支付宝里到底有哪些步数类」落盘 =====
     // 支付宝的类是懒加载的，冷启动第一秒扫不全，所以前 5 趟每趟都扫一次。
     if (retries < 5) {
@@ -749,14 +792,18 @@ static void StepFakerTryHookAlipay(void) {
     // 支付宝改名 / 换类（APStepInfo -> 别的 APxxx）时，上面 A1 会全部落空。
     // 只要新类里还有 numberOfSteps(long long) / setNumberOfSteps:(long long)，
     // 这里就能自动接上 —— 不需要重新逆向，也不需要重新打包。
+    if (noDyn) {
+        HBProbeLog(@"ALIPAY_DYN_DISABLED: /var/mobile/hb_nodyn exists -> A2/A3 dynamic hooks skipped");
+    }
     unsigned int count = 0;
-    Class *classes = objc_copyClassList(&count);
+    Class *classes = (noDyn ? NULL : objc_copyClassList(&count));
     if (classes) {
         for (unsigned int i = 0; i < count; i++) {
             Class c = classes[i];
             if (!c)                     continue;
             if (c == cls)               continue;   // APStepInfo 已由 A1 处理，用专属 orig
             if (!HBIsAppOwnedClass(c))  continue;   // 只碰 App 自己的类
+            if (!HBDynClassNameLooksLikeSteps(c)) continue;  // 名称无步数语义 -> 不碰
 
             // getter：只 hook「本类自己实现」的，跳过纯继承，避免给一堆无关类加方法
             Method gm = class_getInstanceMethod(c, @selector(numberOfSteps));
@@ -832,6 +879,9 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     if (prog && (strstr(prog, "Alipay") != NULL || strstr(prog, "alipay") != NULL)) {
         isAlipay = 1;
     }
+    // 同步到文件级开关：支付宝 hook 的入口闸门读的是它。
+    // 只用局部变量的话，微信进程照样能装支付宝那套动态 hook。
+    g_isAlipay = isAlipay;
     HBRawLog("P2_PROG=%s isAlipay=%d", prog ? prog : "?", isAlipay);
 
     // 注入诊断（v1.0.164）：把「dylib 是否进入本进程」写到用户 home Documents（纯 POSIX，constructor 阶段安全）。
@@ -896,6 +946,11 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     HBRawLog("P7_WECHAT after probe");
     StepFakerTryHookCoreMotion();
     HBRawLog("P8_WECHAT after CoreMotion");
+    // 注意：这里原本还会调一次 StepFakerTryHookAlipay()。
+    // 1.0.165 时代它是空转（微信里没有 APStepInfo，直接 return），
+    // 但 1.0.166 加了「动态扫描 + 按签名 hook」之后，同样的调用会去扫描并 hook
+    // 微信自己的 9 万多个类 —— 微信闪退就是这么来的。现在函数内部有 g_isAlipay 闸门，
+    // 这里保留一次调用只为落一条 ALIPAY_SKIPPED 日志，不会再装任何 hook。
     StepFakerTryHookAlipay();
     HBRawLog("P9_DONE_WECHAT");
 }
