@@ -887,13 +887,19 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     // 注入诊断（v1.0.164）：把「dylib 是否进入本进程」写到用户 home Documents（纯 POSIX，constructor 阶段安全）。
     // 支付宝沙盒可能禁止写 /var/mobile 根目录，但 /var/mobile/Documents 是用户目录通常可写；
     // 若支付宝进程出现 [INJ] ... isAlipay=1，说明 dylib 已注入；若完全没有，说明 plist 过滤未命中。
-    // P0.5 也在同一位置写 [INJ-PROBE] 行，方便区分不同版本的日志格式。
+    // 同时在 /var/mobile/ 根目录也写一份（hb_probe_inject_<prog>.log），用于区分「dylib 根本没加载」
+    // 和「dylib 加载了但 Documents 不可写」两种情况。
     {
         char inj[640];
-        snprintf(inj, sizeof(inj), "[INJ-PROBE] %s isAlipay=%d\n", prog ? prog : "?", isAlipay);
-        int fd = open("/var/mobile/Documents/hb_inject.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        const char *pn = prog ? prog : "unknown";
+        // 写 /var/mobile/ 根（rootless 下这是可达的）
+        char root_path[256];
+        snprintf(root_path, sizeof(root_path), "/var/mobile/hb_probe_inject_%s.log", pn);
+        snprintf(inj, sizeof(inj), "[INJ] %s isAlipay=%d\n", pn, isAlipay);
+        int fd = open(root_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (fd >= 0) { write(fd, inj, (unsigned)strlen(inj)); close(fd); }
-        snprintf(inj, sizeof(inj), "[INJ] %s isAlipay=%d\n", prog ? prog : "?", isAlipay);
+        // 写 /var/mobile/Documents/（更可靠的用户目录）
+        snprintf(inj, sizeof(inj), "[INJ] %s isAlipay=%d\n", pn, isAlipay);
         fd = open("/var/mobile/Documents/hb_inject.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (fd >= 0) { write(fd, inj, (unsigned)strlen(inj)); close(fd); }
     }

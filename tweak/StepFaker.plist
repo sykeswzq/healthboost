@@ -11,8 +11,6 @@
             <string>com.tencent.xin</string>
             <string>com.alipay.iphoneclient</string>
         </array>
-        <!-- 去掉 Executables：改用纯 Bundle ID 匹配，避免进程名变化导致注入失败。
-             Dopamine rootless 下 Bundle ID 是更稳定的过滤依据。 -->
     </dict>
 </dict>
 </plist>
