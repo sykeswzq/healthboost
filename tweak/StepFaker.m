@@ -79,72 +79,40 @@ static BOOL HBHookClass(Class cls, SEL sel, IMP replacement, IMP *origOut) {
     return YES;
 }
 
-// 前向声明：下列日志函数在文件后段定义，前置声明以避免「调用未声明函数」编译错误。
-static void HBRawLog(const char *fmt, ...);
-static void HBProbeLog(NSString *fmt, ...);
-
 // 读取目标步数（0 = 不篡改，原样放行）。
-// v1.0.159：增加「值来源」诊断日志，定位 99999 到底来自文件还是 CFPreferences。
 static NSInteger HBReadFakeSteps(void) {
     @autoreleasepool {
-        // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入；支付宝容器一般没有）
-        NSInteger fileVal = 0;
-        NSString *filePath = nil;
         NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
             NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *doc = paths.firstObject;
         if (doc.length > 0) {
             NSString *p = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
-            filePath = p;
             NSString *c = [NSString stringWithContentsOfFile:p
                                                   encoding:NSUTF8StringEncoding
                                                      error:nil];
             if (c.length > 0) {
                 NSString *line = [[c componentsSeparatedByString:@"\n"] firstObject];
-                fileVal = [line integerValue];
+                NSInteger v = [line integerValue];
+                if (v > 0) return v;
             }
         }
-        // ② 共享通道（v1.0.164 新增）：App 把假步数统一写到用户 home 的
-        //    /var/mobile/Documents/hb_steps.txt，任何进程（含支付宝）都能直接读到，
-        //    不依赖各 App 自身沙盒容器。这是支付宝拿到假值的唯一可靠来源。
-        NSInteger sharedVal = 0;
-        {
-            NSString *sp = @"/var/mobile/Documents/hb_steps.txt";
-            NSString *sc = [NSString stringWithContentsOfFile:sp
-                                                    encoding:NSUTF8StringEncoding
-                                                       error:nil];
-            if (sc.length > 0) {
-                NSString *line = [[sc componentsSeparatedByString:@"\n"] firstObject];
-                sharedVal = [line integerValue];
-            }
-        }
-        NSInteger fileValEffective = (sharedVal > 0) ? sharedVal : fileVal;
-
-        NSInteger cfVal = 0;
         CFPropertyListRef val = CFPreferencesCopyValue(
             CFSTR("steps"),
             CFSTR("com.apple.mobile.healthboost"),
             kCFPreferencesAnyUser,
             kCFPreferencesAnyHost);
         if (val) {
+            NSInteger v = 0;
             if (CFGetTypeID(val) == CFNumberGetTypeID()) {
-                CFNumberGetValue((CFNumberRef)val, kCFNumberNSIntegerType, &cfVal);
+                CFNumberGetValue((CFNumberRef)val, kCFNumberNSIntegerType, &v);
             } else if (CFGetTypeID(val) == CFStringGetTypeID()) {
-                cfVal = [(__bridge NSString *)val integerValue];
+                NSString *s = (__bridge NSString *)val;
+                v = [s integerValue];
             }
             CFRelease(val);
+            if (v > 0) return v;
         }
-        // 优先共享文件，其次进程容器文件，再次 CFPreferences；三路都打印，便于定位 99999 来源
-        NSInteger result = (fileValEffective > 0) ? fileValEffective : cfVal;
-        HBProbeLog(@"READ_FAKE: sharedFile=%ld selfFile=%ld cfPref=%ld -> using=%ld",
-                   (long)sharedVal, (long)fileVal, (long)cfVal, (long)result);
-        // 防御：99999 是支付宝的异常/兜底哨兵值（非用户真实意图）；>200000 视为离谱脏值。
-        // 正常伪造步数（含 9万~20万）不受影响，仅拦截确切 99999 与明显异常值。
-        if (result == 99999 || result > 200000 || result <= 0) {
-            HBProbeLog(@"READ_FAKE_IGNORE: value=%ld 疑似残留脏值/哨兵，跳过伪造（显示真实步数）", (long)result);
-            return 0;
-        }
-        return result;
+        return 0;
     }
 }
 
@@ -541,197 +509,52 @@ static void StepFakerTryHookProbe(void) {
     probeDone = YES;
 }
 
-// ===== 方案 A+B：支付宝步数类自动探测 + 全量扫描兜底 =====
-//
-// 背景：支付宝每次大版本可能重命名/删除内部步数类（如 APStepInfo → 新名字）。
-// 旧代码硬编码 "APStepInfo"，一旦类被改名，hook 就彻底失效 → 99999 重现。
-//
-// 本函数两件事一起做：
-//   (A) 硬编码兜底：仍优先 hook 已知的 APStepInfo（最小侵入，兼容旧版支付宝）
-//   (B) 动态扫描：遍历当前进程全部已注册类，找出所有「numberOfSteps 返回 long long」
-//         和「setNumberOfSteps: 接收 long long 参数」的类，全部 hook 上。
-//       这样无论支付宝把类改成什么名字，只要方法签名不变，hook 就永远有效。
-//
-//   额外日志（B 的配套）：每次扫描都把「发现的候选类名 + hook 结果 + 方法签名」
-//         追加到 /var/mobile/Documents/hb_inject.log，便于以后诊断支付宝大版本更新
-//         后 hook 是否还命中。
-//
-// 安全性：扫描全部类只在 constructor 做一次（进程启动时），不影响运行时性能。
-//        扫描范围严格限定为「numberOfSteps/setNumberOfSteps:」两个 selector，
-//        不会误 hook 其他无关方法。
-
-static void HBLogInjectScanForAlipayClasses(void) {
-    unsigned int count = 0;
-    Class *classes = objc_copyClassList(&count);
-    if (!classes) return;
-
-    // C 数组收集候选类（避免 NSMutableArray<Class*> 泛型限制）
-    static Class numStepsCandidates[200];
-    static Class setNumStepsCandidates[200];
-    int numCount = 0, setCount = 0;
-
-    for (unsigned int i = 0; i < count; i++) {
-        Class cls = classes[i];
-        if (!cls) continue;
-
-        Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
-        if (m && numCount < 200) {
-            const char *enc = method_getTypeEncoding(m);
-            if (enc && enc[0] == 'q') {
-                numStepsCandidates[numCount++] = cls;
-                HBProbeLog(@"SCAN_FOUND_numberOfSteps: class=%s enc=%s",
-                           NSStringFromClass(cls).UTF8String, enc);
-            }
-        }
-
-        Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
-        if (sm && setCount < 200) {
-            const char *se = method_getTypeEncoding(sm);
-            if (se && strchr(se, 'q')) {
-                setNumStepsCandidates[setCount++] = cls;
-                HBProbeLog(@"SCAN_FOUND_setNumberOfSteps: class=%s enc=%s",
-                           NSStringFromClass(cls).UTF8String, se);
-            }
-        }
-    }
-    free(classes);
-
-    {
-        FILE *f = fopen("/var/mobile/Documents/hb_inject.log", "a");
-        if (f) {
-            fprintf(f, "\n[SCAN] numberOfSteps candidates (%d):\n", numCount);
-            for (int i = 0; i < numCount; i++) {
-                Method m = class_getInstanceMethod(numStepsCandidates[i], @selector(numberOfSteps));
-                const char *enc = m ? method_getTypeEncoding(m) : "?";
-                fprintf(f, "  - %s  enc=%s\n", NSStringFromClass(numStepsCandidates[i]).UTF8String, enc);
-            }
-            fprintf(f, "[SCAN] setNumberOfSteps: candidates (%d):\n", setCount);
-            for (int i = 0; i < setCount; i++) {
-                Method sm = class_getInstanceMethod(setNumStepsCandidates[i], @selector(setNumberOfSteps:));
-                const char *se = sm ? method_getTypeEncoding(sm) : "?";
-                fprintf(f, "  - %s  enc=%s\n", NSStringFromClass(setNumStepsCandidates[i]).UTF8String, se);
-            }
-            fclose(f);
-        }
-    }
-}
-
-}
-
+// 支付宝专用 hook：仅 hook APStepInfo（minimal footprint，避免触发完整性校验）
 static void StepFakerTryHookAlipay(void) {
     static BOOL apDone = NO;
     if (apDone) return;
-    apDone = YES; // 防重复执行
-
-    // ---- B：先做一次全量扫描，把候选类名全部记日志 ----
-    HBLogInjectScanForAlipayClasses();
-
-    // ---- A1：硬编码兜底 APStepInfo（兼容旧版支付宝） ----
     Class cls = objc_getClass("APStepInfo");
     if (!cls) {
-        HBProbeLog(@"ALIPAY_CLASS_MISSING: APStepInfo not found in this Alipay version");
-        HBRawLog("ALIPAY_CLASS_MISSING: APStepInfo not found — dynamic scan above shows actual candidates");
+        // 支付宝的类可能延迟加载，1 秒后重试
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StepFakerTryHookAlipay(); });
+        return;
     }
-
-    if (cls) {
-        Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
-        if (m) {
-            const char *ret = method_getTypeEncoding(m);
-            if (ret && ret[0] == 'q') {
-                if (HBHookInstance(cls, @selector(numberOfSteps), (IMP)new_apSteps, (IMP *)&orig_apSteps)) {
-                    HBProbeLog(@"ALIPAY_HOOK_INSTALLED: APStepInfo.numberOfSteps(long long) hooked");
-                } else {
-                    HBProbeLog(@"ALIPAY_HOOK_FAILED: HBHookInstance returned NO");
-                }
-                HBProbeLog(@"BUILD_MARKER_XY7Q_PRESENT");
+    Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
+    if (m) {
+        const char *ret = method_getTypeEncoding(m);
+        // 'q' = long long，确保只 hook 返回 long long 的那一个 numberOfSteps
+        if (ret && ret[0] == 'q') {
+            if (HBHookInstance(cls, @selector(numberOfSteps), (IMP)new_apSteps, (IMP *)&orig_apSteps)) {
+                HBProbeLog(@"ALIPAY_HOOK_INSTALLED: APStepInfo.numberOfSteps(long long) hooked");
             } else {
-                HBProbeLog(@"ALIPAY_HOOK_SKIPPED: APStepInfo.numberOfSteps ret type=%s (not 'q')", ret ? ret : "?");
+                HBProbeLog(@"ALIPAY_HOOK_FAILED: HBHookInstance returned NO");
             }
+            HBProbeLog(@"BUILD_MARKER_XY7Q_PRESENT");
         } else {
-            HBProbeLog(@"ALIPAY_NO_METHOD: APStepInfo has no numberOfSteps");
+            HBProbeLog(@"ALIPAY_HOOK_SKIPPED: APStepInfo.numberOfSteps ret type=%s (not 'q')", ret ? ret : "?");
         }
-
-        // setter
-        Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
-        if (sm) {
-            const char *senc = method_getTypeEncoding(sm);
-            if (senc && senc[0] == 'v' && strchr(senc, 'q')) {
-                if (HBHookInstance(cls, @selector(setNumberOfSteps:), (IMP)new_setApSteps, (IMP *)&orig_setApSteps)) {
-                    HBProbeLog(@"ALIPAY_SETTER_HOOKED: APStepInfo.setNumberOfSteps: hooked");
-                } else {
-                    HBProbeLog(@"ALIPAY_SETTER_FAILED: HBHookInstance returned NO");
-                }
-            } else {
-                HBProbeLog(@"ALIPAY_SETTER_SKIPPED: setNumberOfSteps: enc=%s (expect v..q)", senc ? senc : "?");
-            }
-        } else {
-            HBProbeLog(@"ALIPAY_NO_SETTER: APStepInfo has no setNumberOfSteps:");
-        }
-    }
-
-    // ---- A2：动态扫描兜底 —— 对所有「numberOfSteps 返回 long long」的类也 hook ----
-    // 覆盖支付宝大版本改名后 APStepInfo 消失的情况
-    unsigned int scannedCount = 0;
-    Class *allClasses = objc_copyClassList(&scannedCount);
-    if (allClasses) {
-        NSInteger extraHooked = 0;
-        for (unsigned int i = 0; i < scannedCount; i++) {
-            Class c = allClasses[i];
-            if (!c) continue;
-            // 跳过已知类（避免重复 hook）
-            if (cls && c == cls) continue;
-
-            Method m = class_getInstanceMethod(c, @selector(numberOfSteps));
-            if (m) {
-                const char *enc = method_getTypeEncoding(m);
-                if (enc && enc[0] == 'q') {
-                    if (HBHookInstance(c, @selector(numberOfSteps), (IMP)new_apSteps, NULL)) {
-                        extraHooked++;
-                        HBProbeLog(@"ALIPAY_DYNAMIC_HOOK: %s.numberOfSteps(long long) also hooked",
-                                   NSStringFromClass(c));
-                    }
-                }
-            }
-        }
-        free(allClasses);
-        if (extraHooked > 0) {
-            HBRawLog("ALIPAY_DYNAMIC_EXTRA_HOOKED=%ld (APStepInfo may have been renamed)", (long)extraHooked);
-        }
-    }
-
-    // ---- A3：同样扫描 setNumberOfSteps: 的其它类 ----
-    Class *scanned2 = objc_copyClassList(&scannedCount);
-    if (scanned2) {
-        NSInteger setExtra = 0;
-        for (unsigned int i = 0; i < scannedCount; i++) {
-            Class c = scanned2[i];
-            if (!c) continue;
-            if (cls && c == cls) continue;
-
-            Method sm = class_getInstanceMethod(c, @selector(setNumberOfSteps:));
-            if (sm) {
-                const char *se = method_getTypeEncoding(sm);
-                if (se && se[0] == 'v' && strchr(se, 'q')) {
-                    if (HBHookInstance(c, @selector(setNumberOfSteps:), (IMP)new_setApSteps, NULL)) {
-                        setExtra++;
-                        HBProbeLog(@"ALIPAY_DYNAMIC_SET_HOOK: %s.setNumberOfSteps: also hooked",
-                                   NSStringFromClass(c));
-                    }
-                }
-            }
-        }
-        free(scanned2);
-        if (setExtra > 0) {
-            HBRawLog("ALIPAY_DYNAMIC_SET_EXTRA_HOOKED=%ld", (long)setExtra);
-        }
-    }
-
-    // 最终汇总日志
-    if (!cls) {
-        HBRawLog("ALIPAY_FALLBACK_ONLY: APStepInfo absent, relying on dynamic scan results above");
     } else {
-        HBRawLog("ALIPAY_APStepInfo_found=YES dynamic_scan_done");
+        HBProbeLog(@"ALIPAY_NO_METHOD: APStepInfo has no numberOfSteps (Alipay version mismatch)");
     }
+
+    // setter：兜住「set 进 ivar 之后直接读 ivar」的用法 —— 只 hook getter 会被绕过
+    Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
+    if (sm) {
+        const char *senc = method_getTypeEncoding(sm);
+        // 期望形如 v24@0:8q16：void 返回 + 一个 long long 参数
+        if (senc && senc[0] == 'v' && strchr(senc, 'q')) {
+            if (HBHookInstance(cls, @selector(setNumberOfSteps:), (IMP)new_setApSteps, (IMP *)&orig_setApSteps)) {
+                HBProbeLog(@"ALIPAY_SETTER_HOOKED: APStepInfo.setNumberOfSteps: hooked");
+            } else {
+                HBProbeLog(@"ALIPAY_SETTER_FAILED: HBHookInstance returned NO");
+            }
+        } else {
+            HBProbeLog(@"ALIPAY_SETTER_SKIPPED: setNumberOfSteps: enc=%s (expect v..q)", senc ? senc : "?");
+        }
+    } else {
+        HBProbeLog(@"ALIPAY_NO_SETTER: APStepInfo has no setNumberOfSteps:");
+    }
+    apDone = YES;
 }
 
 __attribute__((constructor)) static void StepFakerInit(void) {
@@ -748,24 +571,9 @@ __attribute__((constructor)) static void StepFakerInit(void) {
              safeMode, safeMode ? "exists -> skip ALL hooks" : "absent");
 
     // ---- P2：识别宿主进程（纯 POSIX，不用 NSBundle）----
-    // 重要：isAlipay 必须根据进程名正确置位，否则支付宝会误走微信分支，
-    // 把 HKSampleQuery 等假样本 hook 全装上，支付宝累加后截断成 99999。
     const char *prog = getprogname();
     int isAlipay = 0;
-    if (prog && (strstr(prog, "Alipay") != NULL || strstr(prog, "alipay") != NULL)) {
-        isAlipay = 1;
-    }
-    HBRawLog("P2_PROG=%s isAlipay=%d", prog ? prog : "?", isAlipay);
-
-    // 注入诊断（v1.0.164）：把「dylib 是否进入本进程」写到用户 home Documents（纯 POSIX，constructor 阶段安全）。
-    // 支付宝沙盒可能禁止写 /var/mobile 根目录，但 /var/mobile/Documents 是用户目录通常可写；
-    // 若支付宝进程出现 [INJ] ... isAlipay=1，说明 dylib 已注入；若完全没有，说明 plist 过滤未命中。
-    {
-        char inj[640];
-        snprintf(inj, sizeof(inj), "[INJ] %s isAlipay=%d\n", prog ? prog : "?", isAlipay);
-        int fd = open("/var/mobile/Documents/hb_inject.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
-        if (fd >= 0) { write(fd, inj, (unsigned)strlen(inj)); close(fd); }
-    }
+    HBRawLog("P2_PROG=%s", prog ? prog : "?");
 
     // ---- P3：解析 Substrate / ElleKit 的 MSHookMessageEx ----
     // arm64e 有 PAC 指针认证，只有 MSHookMessageEx 能安全替换 IMP；
@@ -799,13 +607,10 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     // swizzle 就多一分触发其完整性校验的风险；先把侵入面压到最小，
     // 确认 APStepInfo 这条路能通，再谈要不要加别的。
     if (isAlipay) {
-        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
         HBRawLog("P4_ALIPAY minimal footprint: hook APStepInfo only");
-        HBProbeLog(@"P4_ALIPAY: isAlipay=1 prog=%s bid=%@ -> hook APStepInfo only",
-                   prog ? prog : "?", bid ?: @"?");
         StepFakerTryHookAlipay();
         HBRawLog("P5_ALIPAY hook done");
-        HBProbeLog(@"P9_DONE_ALIPAY");
+        HBRawLog("P9_DONE_ALIPAY");
         return;
     }
 
