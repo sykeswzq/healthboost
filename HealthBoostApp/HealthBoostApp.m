@@ -986,12 +986,8 @@ static NSString *HBNotifFlagPath(void) {
 
 - (void)finishSuccess:(HKSourceRevision *)deviceRev {
     self.busy = NO;
-    [self updateStatus:@"已写入健康数据"];
-    NSString *mode = deviceRev ? @"设备源(已注入)" : @"设备源(仅 HKDevice)";
-    NSString *msg = [NSString stringWithFormat:
-        @"已写入 Apple Health\n来源模式：%@\n\n"
-        @"要让「微信运动 / 支付宝运动」也显示，\n请彻底退出并重开对应 App 即可生效。", mode];
-    [self showAlert:@"完成" message:msg];
+    [self updateStatus:@"运动数据已生成"];
+    [self showAlert:@"运动数据已生成" message:@""];
 }
 
 - (void)finishWithError:(NSError *)error busy:(BOOL)busyFlag {

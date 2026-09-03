@@ -43,7 +43,7 @@
     <key>NSHealthShareUsageDescription</key>
     <string>HealthBoost需要访问健康数据来修改您的步数、距离和爬楼数</string>
     <key>NSHealthUpdateUsageDescription</key>
-    <string>HealthBoost需要写入健康数据来同步您的运动记录</string>
+    <string>UCS 需要写入健康数据以生成运动记录，并在微信/支付宝中同步显示步数</string>
     <key>UIDeviceFamily</key>
     <array>
         <integer>1</integer>

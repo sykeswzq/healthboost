@@ -138,7 +138,7 @@ Installed-Size: 1152
 Depends: firmware (>= 13.0)
 Maintainer: sykeswzq
 Author: sykeswzq
-Description: UCS - modifies Apple Health data (steps, distance, flights climbed) and fakes WeChat/Alipay step count via bundled tweak.
+Description: UCS - 运动数据注入工具，支持微信/支付宝步数同步。
 Section: utilities
 Priority: optional
 EOF
