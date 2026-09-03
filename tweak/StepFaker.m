@@ -121,6 +121,11 @@ static NSInteger HBReadFakeSteps(void) {
         NSInteger result = (fileVal > 0) ? fileVal : cfVal;
         HBProbeLog(@"READ_FAKE: file(%@)=%ld cfPref=%ld -> using=%ld",
                    filePath ?: @"?", (long)fileVal, (long)cfVal, (long)result);
+        // 防御：99999 是支付宝的异常/兜底哨兵值（非用户真实意图），>=90000 视为残留脏值，直接不伪造
+        if (result >= 90000 || result <= 0) {
+            HBProbeLog(@"READ_FAKE_IGNORE: value=%ld 疑似残留脏值/哨兵，跳过伪造（显示真实步数）", (long)result);
+            return 0;
+        }
         return result;
     }
 }

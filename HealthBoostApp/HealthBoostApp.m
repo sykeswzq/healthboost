@@ -173,7 +173,9 @@ static NSInteger HBWriteStepsToWeChatContainers(long steps) {
             [fm createDirectoryAtPath:doc withIntermediateDirectories:YES attributes:nil error:nil];
         }
         NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
-        // 用 NSData 写并设 0644，确保微信进程（mobile 用户）可读
+        // v1.0.161：写之前先删旧文件，避免残留脏值（如早期测试写下的 99999）覆盖不彻底
+        if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
+        // 用 NSData 写并设 0644，确保微信/支付宝进程（mobile 用户）可读
         BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
         if (ok) {
             [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
