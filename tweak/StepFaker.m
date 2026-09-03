@@ -598,6 +598,67 @@ static void HBLogInjectScanForAlipayClasses(void) {
     }
 }
 
+// ===== 方案 A+B：支付宝步数类自动探测 + 全量扫描兜底 =====
+static void HBLogInjectScanForAlipayClasses(void) {
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    if (!classes) return;
+
+    static Class numStepsCandidates[200];
+    static Class setNumStepsCandidates[200];
+    int numCount = 0, setCount = 0;
+
+    for (unsigned int i = 0; i < count; i++) {
+        Class cls = classes[i];
+        if (!cls) continue;
+
+        Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
+        if (m && numCount < 200) {
+            const char *enc = method_getTypeEncoding(m);
+            if (enc && enc[0] == 'q') {
+                numStepsCandidates[numCount++] = cls;
+                HBProbeLog(@"SCAN_FOUND_numberOfSteps: class=%s enc=%s",
+                           NSStringFromClass(cls).UTF8String, enc);
+            }
+        }
+
+        Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
+        if (sm && setCount < 200) {
+            const char *se = method_getTypeEncoding(sm);
+            if (se && strchr(se, 'q')) {
+                setNumStepsCandidates[setCount++] = cls;
+                HBProbeLog(@"SCAN_FOUND_setNumberOfSteps: class=%s enc=%s",
+                           NSStringFromClass(cls).UTF8String, se);
+            }
+        }
+    }
+    free(classes);
+
+    {
+        FILE *f = fopen("/var/mobile/Documents/hb_inject.log", "a");
+        if (f) {
+            fprintf(f, "
+[SCAN] numberOfSteps candidates (%d):
+", numCount);
+            for (int i = 0; i < numCount; i++) {
+                Method m = class_getInstanceMethod(numStepsCandidates[i], @selector(numberOfSteps));
+                const char *enc = m ? method_getTypeEncoding(m) : "?";
+                fprintf(f, "  - %s  enc=%s
+", NSStringFromClass(numStepsCandidates[i]).UTF8String, enc);
+            }
+            fprintf(f, "[SCAN] setNumberOfSteps: candidates (%d):
+", setCount);
+            for (int i = 0; i < setCount; i++) {
+                Method sm = class_getInstanceMethod(setNumStepsCandidates[i], @selector(setNumberOfSteps:));
+                const char *se = sm ? method_getTypeEncoding(sm) : "?";
+                fprintf(f, "  - %s  enc=%s
+", NSStringFromClass(setNumStepsCandidates[i]).UTF8String, se);
+            }
+            fclose(f);
+        }
+    }
+}
+
 static void StepFakerTryHookAlipay(void) {
     static BOOL apDone = NO;
     if (apDone) return;
