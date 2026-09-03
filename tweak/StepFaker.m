@@ -79,6 +79,10 @@ static BOOL HBHookClass(Class cls, SEL sel, IMP replacement, IMP *origOut) {
     return YES;
 }
 
+// 前向声明：下列日志函数在文件后段定义，前置声明以避免「调用未声明函数」编译错误。
+static void HBRawLog(const char *fmt, ...);
+static void HBProbeLog(NSString *fmt, ...);
+
 // 读取目标步数（0 = 不篡改，原样放行）。
 // v1.0.159：增加「值来源」诊断日志，定位 99999 到底来自文件还是 CFPreferences。
 static NSInteger HBReadFakeSteps(void) {
