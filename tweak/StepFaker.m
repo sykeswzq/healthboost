@@ -599,22 +599,22 @@ static void HBLogInjectScanForAlipayClasses(void) {
     {
         FILE *f = fopen("/var/mobile/Documents/hb_inject.log", "a");
         if (f) {
-            fprintf(f, "
-[SCAN] numberOfSteps candidates (%d):
+            fprintf(f, "\\n[SCAN] numberOfSteps candidates (%d):\\n", numCount);
+            fprintf(f, "\\n[SCAN] numberOfSteps candidates (%d):\\n", numCount);
 ", numCount);
             for (int i = 0; i < numCount; i++) {
                 Method m = class_getInstanceMethod(numStepsCandidates[i], @selector(numberOfSteps));
                 const char *enc = m ? method_getTypeEncoding(m) : "?";
-                fprintf(f, "  - %s  enc=%s
-", NSStringFromClass(numStepsCandidates[i]).UTF8String, enc);
+                fprintf(f, "  - %s  enc=%s\\n", NSStringFromClass(numStepsCandidates[i]).UTF8String, enc);
+                fprintf(f, "  - %s  enc=%s\\n", NSStringFromClass(numStepsCandidates[i]).UTF8String, enc);
             }
-            fprintf(f, "[SCAN] setNumberOfSteps: candidates (%d):
-", setCount);
+            fprintf(f, "[SCAN] setNumberOfSteps: candidates (%d):\\n", setCount);
+            fprintf(f, "[SCAN] setNumberOfSteps: candidates (%d):\\n", setCount);
             for (int i = 0; i < setCount; i++) {
                 Method sm = class_getInstanceMethod(setNumStepsCandidates[i], @selector(setNumberOfSteps:));
                 const char *se = sm ? method_getTypeEncoding(sm) : "?";
-                fprintf(f, "  - %s  enc=%s
-", NSStringFromClass(setNumStepsCandidates[i]).UTF8String, se);
+                fprintf(f, "  - %s  enc=%s\\n", NSStringFromClass(setNumStepsCandidates[i]).UTF8String, se);
+                fprintf(f, "  - %s  enc=%s\\n", NSStringFromClass(setNumStepsCandidates[i]).UTF8String, se);
             }
             fclose(f);
         }
