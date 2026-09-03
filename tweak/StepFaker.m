@@ -80,39 +80,44 @@ static BOOL HBHookClass(Class cls, SEL sel, IMP replacement, IMP *origOut) {
 }
 
 // 读取目标步数（0 = 不篡改，原样放行）。
+// v1.0.159：增加「值来源」诊断日志，定位 99999 到底来自文件还是 CFPreferences。
 static NSInteger HBReadFakeSteps(void) {
     @autoreleasepool {
+        NSInteger fileVal = 0;
+        NSString *filePath = nil;
         NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
             NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *doc = paths.firstObject;
         if (doc.length > 0) {
             NSString *p = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+            filePath = p;
             NSString *c = [NSString stringWithContentsOfFile:p
                                                   encoding:NSUTF8StringEncoding
                                                      error:nil];
             if (c.length > 0) {
                 NSString *line = [[c componentsSeparatedByString:@"\n"] firstObject];
-                NSInteger v = [line integerValue];
-                if (v > 0) return v;
+                fileVal = [line integerValue];
             }
         }
+        NSInteger cfVal = 0;
         CFPropertyListRef val = CFPreferencesCopyValue(
             CFSTR("steps"),
             CFSTR("com.apple.mobile.healthboost"),
             kCFPreferencesAnyUser,
             kCFPreferencesAnyHost);
         if (val) {
-            NSInteger v = 0;
             if (CFGetTypeID(val) == CFNumberGetTypeID()) {
-                CFNumberGetValue((CFNumberRef)val, kCFNumberNSIntegerType, &v);
+                CFNumberGetValue((CFNumberRef)val, kCFNumberNSIntegerType, &cfVal);
             } else if (CFGetTypeID(val) == CFStringGetTypeID()) {
-                NSString *s = (__bridge NSString *)val;
-                v = [s integerValue];
+                cfVal = [(__bridge NSString *)val integerValue];
             }
             CFRelease(val);
-            if (v > 0) return v;
         }
-        return 0;
+        // 优先文件，其次 CFPreferences；两路都打印，便于确认 99999 来自哪
+        NSInteger result = (fileVal > 0) ? fileVal : cfVal;
+        HBProbeLog(@"READ_FAKE: file(%@)=%ld cfPref=%ld -> using=%ld",
+                   filePath ?: @"?", (long)fileVal, (long)cfVal, (long)result);
+        return result;
     }
 }
 
@@ -612,10 +617,13 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     // swizzle 就多一分触发其完整性校验的风险；先把侵入面压到最小，
     // 确认 APStepInfo 这条路能通，再谈要不要加别的。
     if (isAlipay) {
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
         HBRawLog("P4_ALIPAY minimal footprint: hook APStepInfo only");
+        HBProbeLog(@"P4_ALIPAY: isAlipay=1 prog=%s bid=%@ -> hook APStepInfo only",
+                   prog ? prog : "?", bid ?: @"?");
         StepFakerTryHookAlipay();
         HBRawLog("P5_ALIPAY hook done");
-        HBRawLog("P9_DONE_ALIPAY");
+        HBProbeLog(@"P9_DONE_ALIPAY");
         return;
     }
 

@@ -185,6 +185,8 @@ static NSInteger HBWriteStepsToWeChatContainers(long steps) {
 }
 
 static void HBWriteStepsPreference(long steps) {
+    // v1.0.159：诊断增强——把"到底写了什么值到哪"打印出来，定位 99999 来源
+    HBLog(@"[HealthBoost] >> 即将写入步数值 steps=%ld", steps);
     // 通道1（最可靠）：写进微信相关容器，沙盒内必定可读
     NSInteger nContainers = HBWriteStepsToWeChatContainers(steps);
     // 通道1b：无容器守护进程（UGGD）的兜底落点
@@ -200,8 +202,8 @@ static void HBWriteStepsPreference(long steps) {
     BOOL ok = CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"),
                                        kCFPreferencesAnyUser,
                                        kCFPreferencesAnyHost);
-    HBLog(@"[HealthBoost] 步数通道写入完成: 容器=%ld个 varMobile=%ld个 Media=1 偏好sync=%d",
-          (long)nContainers, (long)nVarMobile, ok);
+    HBLog(@"[HealthBoost] 步数通道写入完成: 容器=%ld个(varMobile=%ld) Media=1 偏好sync=%d 写入值=%ld",
+          (long)nContainers, (long)nVarMobile, ok, steps);
 }
 
 // 清除所有「供微信/支付宝读取」的步数假数据，让这些 App 恢复读取真实步数。
@@ -445,10 +447,20 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 - (void)setupNotifications {
     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
     c.delegate = self;
+    static BOOL didRequest = NO;   // 进程内一次性守卫：无论如何只请求一次
     // 仅当授权状态为「未决定」时才弹请求框；已授权/已拒绝都不再重复弹。
     [c getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings){
-        if (settings.authorizationStatus == UNAuthorizationStatusNotDetermined) {
-            [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert completionHandler:^(BOOL g, NSError *e){ (void)g; (void)e; }];
+        UNAuthorizationStatus st = settings.authorizationStatus;
+        HBLog(@"[UCS] 通知权限状态=%ld (0=NotDetermined 1=Denied 2=Authorized 3=Provisional 4=Ephemeral)",
+              (long)st);
+        if (st == UNAuthorizationStatusNotDetermined && !didRequest) {
+            didRequest = YES;
+            [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound|UNAuthorizationOptionBadge
+                            completionHandler:^(BOOL g, NSError *e){
+                HBLog(@"[UCS] 通知授权结果 granted=%d err=%@", g, e ? e.localizedDescription : @"nil");
+            }];
+        } else {
+            HBLog(@"[UCS] 通知已决定(非NotDetermined)或已请求过，跳过弹窗");
         }
     }];
 }
