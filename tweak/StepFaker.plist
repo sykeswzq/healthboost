@@ -6,6 +6,10 @@
     <dict>
         <key>Mode</key>
         <string>Any</string>
+        <key>Executables</key>
+        <array>
+            <string>AlipayWallet</string>
+        </array>
         <key>Bundles</key>
         <array>
             <string>com.tencent.xin</string>
