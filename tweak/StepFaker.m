@@ -571,9 +571,14 @@ __attribute__((constructor)) static void StepFakerInit(void) {
              safeMode, safeMode ? "exists -> skip ALL hooks" : "absent");
 
     // ---- P2：识别宿主进程（纯 POSIX，不用 NSBundle）----
+    // 重要：isAlipay 必须根据进程名正确置位，否则支付宝会误走微信分支，
+    // 把 HKSampleQuery 等假样本 hook 全装上，支付宝累加后截断成 99999。
     const char *prog = getprogname();
     int isAlipay = 0;
-    HBRawLog("P2_PROG=%s", prog ? prog : "?");
+    if (prog && (strstr(prog, "Alipay") != NULL || strstr(prog, "alipay") != NULL)) {
+        isAlipay = 1;
+    }
+    HBRawLog("P2_PROG=%s isAlipay=%d", prog ? prog : "?", isAlipay);
 
     // ---- P3：解析 Substrate / ElleKit 的 MSHookMessageEx ----
     // arm64e 有 PAC 指针认证，只有 MSHookMessageEx 能安全替换 IMP；

@@ -92,37 +92,14 @@ jobs:
 
           echo "=== 全部校验通过，可安全发布 ==="
 
-      - name: Verify StepFaker tweak artifact BEFORE publishing
+      - name: Verify StepFaker tweak embedded in single deb
         run: |
           set -e
-          TDEB=$(ls com.sykes.stepfaker_*_iphoneos-arm64e.deb | head -1)
-          echo "tweak deb file: $TDEB"
-          if [ -z "$TDEB" ]; then
-            echo "ERROR: 未找到 com.sykes.stepfaker_*.deb"
-            exit 1
-          fi
-
-          echo "=== (1) tweak deb 内路径必须是根相对 ./Library/（roothide 范式）==="
-          if dpkg-deb -c "$TDEB" | grep -E '\./var/(jb|roothide)/' ; then
-            echo "ERROR: 检测到 ./var/jb 或 ./var/roothide 前缀路径"
-            exit 1
-          fi
-          if ! dpkg-deb -c "$TDEB" | grep -E '\./Library/MobileSubstrate/DynamicLibraries/StepFaker\.dylib' ; then
-            echo "ERROR: 未找到 ./Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib"
-            exit 1
-          fi
-          if ! dpkg-deb -c "$TDEB" | grep -E '\./Library/MobileSubstrate/DynamicLibraries/StepFaker\.plist' ; then
-            echo "ERROR: 未找到 StepFaker.plist filter"
-            exit 1
-          fi
-          echo "  (1) OK: 路径为根相对 ./Library/MobileSubstrate/"
-
-          echo "=== (2) 展开校验 dylib 签名 + filter 内容 ==="
-          rm -rf /tmp/tcheck && mkdir -p /tmp/tcheck
-          dpkg-deb -x "$TDEB" /tmp/tcheck
-          TDBIN=/tmp/tcheck/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
-          TDPLIST=/tmp/tcheck/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
-          if [ ! -f "$TDBIN" ]; then echo "ERROR: 解包后找不到 dylib"; exit 1; fi
+          TDBIN=/tmp/hbcheck/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
+          TDPLIST=/tmp/hbcheck/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
+          if [ ! -f "$TDBIN" ]; then echo "ERROR: 单 deb 内未找到 StepFaker.dylib"; exit 1; fi
+          if [ ! -f "$TDPLIST" ]; then echo "ERROR: 单 deb 内未找到 StepFaker.plist"; exit 1; fi
+          echo "  (1) OK: 单 deb 内含 tweak dylib + plist（根相对 ./Library/MobileSubstrate/）"
 
           echo "  (2a) dylib Mach-O 头必须是 fat (cafebabe)"
           tmagic=$(xxd -p -l4 "$TDBIN" | tr -d '\n')
@@ -148,7 +125,7 @@ jobs:
           fi
           echo "  (2b) OK: 仅注入 com.tencent.xin + com.alipay.iphoneclient，无通配"
 
-          echo "=== tweak 全部校验通过，可安全发布 ==="
+          echo "=== 单 deb 内 tweak 校验通过，可安全发布 ==="
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

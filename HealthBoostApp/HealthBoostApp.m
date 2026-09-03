@@ -204,6 +204,27 @@ static void HBWriteStepsPreference(long steps) {
           (long)nContainers, (long)nVarMobile, ok);
 }
 
+// 清除所有「供微信/支付宝读取」的步数假数据，让这些 App 恢复读取真实步数。
+// 在用户关闭「每日自动生成」时调用：既然不再自动生成，就不应继续伪造。
+static void HBClearStepsFiles(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *containers = HBWeChatContainerPaths();
+    for (NSString *c in containers) {
+        NSString *path = [c stringByAppendingPathComponent:@"Documents/hb_steps.txt"];
+        if ([fm fileExistsAtPath:path]) {
+            [fm removeItemAtPath:path error:nil];
+            HBLog(@"[HealthBoost] 已清除容器步数文件: %@", path);
+        }
+    }
+    NSString *varDoc = @"/var/mobile/Documents/hb_steps.txt";
+    if ([fm fileExistsAtPath:varDoc]) { [fm removeItemAtPath:varDoc error:nil]; HBLog(@"[HealthBoost] 已清除 /var/mobile/Documents/hb_steps.txt"); }
+    NSString *media = @"/var/mobile/Media/HealthBoost/hb_steps.txt";
+    if ([fm fileExistsAtPath:media]) { [fm removeItemAtPath:media error:nil]; HBLog(@"[HealthBoost] 已清除 /var/mobile/Media/HealthBoost/hb_steps.txt"); }
+    CFPreferencesSetValue(CFSTR("steps"), NULL, CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+    CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+    HBLog(@"[HealthBoost] 已清空 CFPreferences 步数，微信/支付宝恢复真实步数");
+}
+
 // 扫描所有数据容器，收集 tweak 写下的诊断日志。
 // tweak 跑在微信沙盒里，写不了 /var/mobile/Media/，只能写自己容器的 Documents。
 // 本 App 无沙盒，可以遍历所有容器把它读回来。
@@ -392,6 +413,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 @property (assign, nonatomic) BOOL busy;
 @property (strong, nonatomic) HKHealthStore *healthStore;
 @property (strong, nonatomic) UILabel *statusLabel;
+@property (strong, nonatomic) UIDatePicker *timePicker;
 @end
 
 @implementation HBMainViewController
@@ -423,7 +445,12 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 - (void)setupNotifications {
     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
     c.delegate = self;
-    [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert completionHandler:^(BOOL g, NSError *e){ (void)g; (void)e; }];
+    // 仅当授权状态为「未决定」时才弹请求框；已授权/已拒绝都不再重复弹。
+    [c getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings){
+        if (settings.authorizationStatus == UNAuthorizationStatusNotDetermined) {
+            [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert completionHandler:^(BOOL g, NSError *e){ (void)g; (void)e; }];
+        }
+    }];
 }
 
 #pragma mark - Table
@@ -523,8 +550,13 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     [self presentViewController:a animated:YES completion:nil];
 }
 
+// 系统原生时间选择器：模态 UINavigationController 内放 UIDatePicker(.wheels) + 完成/取消。
+// 旧版用 ActionSheet + 手写约束，布局错乱导致「确定」点不动；原生导航栏按钮最稳。
 - (void)pickTime {
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"生成时间" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    UIViewController *pickerVC = [[UIViewController alloc] init];
+    pickerVC.view.backgroundColor = [UIColor systemBackgroundColor];
+    pickerVC.title = @"选择生成时间";
+
     UIDatePicker *p = [[UIDatePicker alloc] init];
     p.datePickerMode = UIDatePickerModeTime;
     p.preferredDatePickerStyle = UIDatePickerStyleWheels;
@@ -533,28 +565,57 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     NSDateComponents *c = [[NSDateComponents alloc] init];
     c.hour = self.schedHour; c.minute = self.schedMinute;
     p.date = [cal dateFromComponents:c] ?: [NSDate date];
-    [a.view addSubview:p];
+    [pickerVC.view addSubview:p];
+    self.timePicker = p;
     [NSLayoutConstraint activateConstraints:@[
-        [p.leadingAnchor constraintEqualToAnchor:a.view.leadingAnchor constant:8],
-        [p.trailingAnchor constraintEqualToAnchor:a.view.trailingAnchor constant:-8],
-        [p.topAnchor constraintEqualToAnchor:a.view.topAnchor constant:40],
-        [p.heightAnchor constraintEqualToConstant:200]
+        [p.leadingAnchor constraintEqualToAnchor:pickerVC.view.leadingAnchor],
+        [p.trailingAnchor constraintEqualToAnchor:pickerVC.view.trailingAnchor],
+        [p.centerYAnchor constraintEqualToAnchor:pickerVC.view.centerYAnchor],
+        [p.heightAnchor constraintEqualToConstant:216]
     ]];
-    [a addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act){
+
+    UIBarButtonItem *done = [[UIBarButtonItem alloc] initWithTitle:@"完成"
+                                                            style:UIBarButtonItemStyleDone
+                                                           target:self
+                                                           action:@selector(pickTimeDone:)];
+    UIBarButtonItem *cancel = [[UIBarButtonItem alloc] initWithTitle:@"取消"
+                                                              style:UIBarButtonItemStylePlain
+                                                             target:self
+                                                             action:@selector(dismissPicker)];
+    pickerVC.navigationItem.rightBarButtonItem = done;
+    pickerVC.navigationItem.leftBarButtonItem = cancel;
+
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:pickerVC];
+    nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    [self presentViewController:nav animated:YES completion:nil];
+}
+
+- (void)pickTimeDone:(id)sender {
+    UIDatePicker *p = self.timePicker;
+    if (p) {
         NSCalendar *c2 = [NSCalendar currentCalendar];
         NSDateComponents *cc = [c2 components:NSCalendarUnitHour|NSCalendarUnitMinute fromDate:p.date];
         self.schedHour = cc.hour; self.schedMinute = cc.minute;
-        [self saveSettings]; [self scheduleDailyNotification]; [self.tableView reloadData];
-    }]];
-    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:a animated:YES completion:nil];
+        [self saveSettings];
+        [self scheduleDailyNotification];
+        [self.tableView reloadData];
+        [self updateStatus:[NSString stringWithFormat:@"已设置每日 %02ld:%02ld 生成", (long)self.schedHour, (long)self.schedMinute]];
+    }
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)dismissPicker {
+    [self dismissViewControllerAnimated:YES completion:nil];
 }
 
 - (void)scheduleSwitchChanged:(UISwitch *)sender {
     self.scheduleOn = sender.isOn;
     [self saveSettings];
     if (self.scheduleOn) [self scheduleDailyNotification];
-    else [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifiers:@[@"UCSDailyGen"]];
+    else {
+        [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifiers:@[@"UCSDailyGen"]];
+        HBClearStepsFiles();   // 关闭定时：清掉微信/支付宝的假步数，恢复真实
+    }
     [self updateStatus:self.scheduleOn ? [NSString stringWithFormat:@"已开启每日 %02ld:%02ld 定时生成", (long)self.schedHour, (long)self.schedMinute] : @"已关闭定时"];
 }
 
