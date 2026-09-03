@@ -79,40 +79,72 @@ static BOOL HBHookClass(Class cls, SEL sel, IMP replacement, IMP *origOut) {
     return YES;
 }
 
+// 前向声明：下列日志函数在文件后段定义，前置声明以避免「调用未声明函数」编译错误。
+static void HBRawLog(const char *fmt, ...);
+static void HBProbeLog(NSString *fmt, ...);
+
 // 读取目标步数（0 = 不篡改，原样放行）。
+// v1.0.159：增加「值来源」诊断日志，定位 99999 到底来自文件还是 CFPreferences。
 static NSInteger HBReadFakeSteps(void) {
     @autoreleasepool {
+        // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入；支付宝容器一般没有）
+        NSInteger fileVal = 0;
+        NSString *filePath = nil;
         NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
             NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *doc = paths.firstObject;
         if (doc.length > 0) {
             NSString *p = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+            filePath = p;
             NSString *c = [NSString stringWithContentsOfFile:p
                                                   encoding:NSUTF8StringEncoding
                                                      error:nil];
             if (c.length > 0) {
                 NSString *line = [[c componentsSeparatedByString:@"\n"] firstObject];
-                NSInteger v = [line integerValue];
-                if (v > 0) return v;
+                fileVal = [line integerValue];
             }
         }
+        // ② 共享通道（v1.0.164 新增）：App 把假步数统一写到用户 home 的
+        //    /var/mobile/Documents/hb_steps.txt，任何进程（含支付宝）都能直接读到，
+        //    不依赖各 App 自身沙盒容器。这是支付宝拿到假值的唯一可靠来源。
+        NSInteger sharedVal = 0;
+        {
+            NSString *sp = @"/var/mobile/Documents/hb_steps.txt";
+            NSString *sc = [NSString stringWithContentsOfFile:sp
+                                                    encoding:NSUTF8StringEncoding
+                                                       error:nil];
+            if (sc.length > 0) {
+                NSString *line = [[sc componentsSeparatedByString:@"\n"] firstObject];
+                sharedVal = [line integerValue];
+            }
+        }
+        NSInteger fileValEffective = (sharedVal > 0) ? sharedVal : fileVal;
+
+        NSInteger cfVal = 0;
         CFPropertyListRef val = CFPreferencesCopyValue(
             CFSTR("steps"),
             CFSTR("com.apple.mobile.healthboost"),
             kCFPreferencesAnyUser,
             kCFPreferencesAnyHost);
         if (val) {
-            NSInteger v = 0;
             if (CFGetTypeID(val) == CFNumberGetTypeID()) {
-                CFNumberGetValue((CFNumberRef)val, kCFNumberNSIntegerType, &v);
+                CFNumberGetValue((CFNumberRef)val, kCFNumberNSIntegerType, &cfVal);
             } else if (CFGetTypeID(val) == CFStringGetTypeID()) {
-                NSString *s = (__bridge NSString *)val;
-                v = [s integerValue];
+                cfVal = [(__bridge NSString *)val integerValue];
             }
             CFRelease(val);
-            if (v > 0) return v;
         }
-        return 0;
+        // 优先共享文件，其次进程容器文件，再次 CFPreferences；三路都打印，便于定位 99999 来源
+        NSInteger result = (fileValEffective > 0) ? fileValEffective : cfVal;
+        HBProbeLog(@"READ_FAKE: sharedFile=%ld selfFile=%ld cfPref=%ld -> using=%ld",
+                   (long)sharedVal, (long)fileVal, (long)cfVal, (long)result);
+        // 防御：99999 是支付宝的异常/兜底哨兵值（非用户真实意图）；>200000 视为离谱脏值。
+        // 正常伪造步数（含 9万~20万）不受影响，仅拦截确切 99999 与明显异常值。
+        if (result == 99999 || result > 200000 || result <= 0) {
+            HBProbeLog(@"READ_FAKE_IGNORE: value=%ld 疑似残留脏值/哨兵，跳过伪造（显示真实步数）", (long)result);
+            return 0;
+        }
+        return result;
     }
 }
 
@@ -510,6 +542,62 @@ static void StepFakerTryHookProbe(void) {
 }
 
 // 支付宝专用 hook：仅 hook APStepInfo（minimal footprint，避免触发完整性校验）
+// ===== 方案 A+B：支付宝步数类自动探测 + 全量扫描兜底 =====
+static void HBLogInjectScanForAlipayClasses(void) {
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    if (!classes) return;
+
+    static Class numStepsCandidates[200];
+    static Class setNumStepsCandidates[200];
+    int numCount = 0, setCount = 0;
+
+    for (unsigned int i = 0; i < count; i++) {
+        Class cls = classes[i];
+        if (!cls) continue;
+
+        Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
+        if (m && numCount < 200) {
+            const char *enc = method_getTypeEncoding(m);
+            if (enc && enc[0] == 'q') {
+                numStepsCandidates[numCount++] = cls;
+                HBProbeLog(@"SCAN_FOUND_numberOfSteps: class=%s enc=%s",
+                           NSStringFromClass(cls).UTF8String, enc);
+            }
+        }
+
+        Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
+        if (sm && setCount < 200) {
+            const char *se = method_getTypeEncoding(sm);
+            if (se && strchr(se, 'q')) {
+                setNumStepsCandidates[setCount++] = cls;
+                HBProbeLog(@"SCAN_FOUND_setNumberOfSteps: class=%s enc=%s",
+                           NSStringFromClass(cls).UTF8String, se);
+            }
+        }
+    }
+    free(classes);
+
+    {
+        FILE *f = fopen("/var/mobile/Documents/hb_inject.log", "a");
+        if (f) {
+            fprintf(f, "\n[SCAN] numberOfSteps candidates (%d):\n", numCount);
+            for (int i = 0; i < numCount; i++) {
+                Method m = class_getInstanceMethod(numStepsCandidates[i], @selector(numberOfSteps));
+                const char *enc = m ? method_getTypeEncoding(m) : "?";
+                fprintf(f, "  - %s  enc=%s\n", NSStringFromClass(numStepsCandidates[i]).UTF8String, enc);
+            }
+            fprintf(f, "[SCAN] setNumberOfSteps: candidates (%d):\n", setCount);
+            for (int i = 0; i < setCount; i++) {
+                Method sm = class_getInstanceMethod(setNumStepsCandidates[i], @selector(setNumberOfSteps:));
+                const char *se = sm ? method_getTypeEncoding(sm) : "?";
+                fprintf(f, "  - %s  enc=%s\n", NSStringFromClass(setNumStepsCandidates[i]).UTF8String, se);
+            }
+            fclose(f);
+        }
+    }
+}
+
 static void StepFakerTryHookAlipay(void) {
     static BOOL apDone = NO;
     if (apDone) return;
@@ -571,9 +659,24 @@ __attribute__((constructor)) static void StepFakerInit(void) {
              safeMode, safeMode ? "exists -> skip ALL hooks" : "absent");
 
     // ---- P2：识别宿主进程（纯 POSIX，不用 NSBundle）----
+    // 重要：isAlipay 必须根据进程名正确置位，否则支付宝会误走微信分支，
+    // 把 HKSampleQuery 等假样本 hook 全装上，支付宝累加后截断成 99999。
     const char *prog = getprogname();
     int isAlipay = 0;
-    HBRawLog("P2_PROG=%s", prog ? prog : "?");
+    if (prog && (strstr(prog, "Alipay") != NULL || strstr(prog, "alipay") != NULL)) {
+        isAlipay = 1;
+    }
+    HBRawLog("P2_PROG=%s isAlipay=%d", prog ? prog : "?", isAlipay);
+
+    // 注入诊断（v1.0.164）：把「dylib 是否进入本进程」写到用户 home Documents（纯 POSIX，constructor 阶段安全）。
+    // 支付宝沙盒可能禁止写 /var/mobile 根目录，但 /var/mobile/Documents 是用户目录通常可写；
+    // 若支付宝进程出现 [INJ] ... isAlipay=1，说明 dylib 已注入；若完全没有，说明 plist 过滤未命中。
+    {
+        char inj[640];
+        snprintf(inj, sizeof(inj), "[INJ] %s isAlipay=%d\n", prog ? prog : "?", isAlipay);
+        int fd = open("/var/mobile/Documents/hb_inject.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) { write(fd, inj, (unsigned)strlen(inj)); close(fd); }
+    }
 
     // ---- P3：解析 Substrate / ElleKit 的 MSHookMessageEx ----
     // arm64e 有 PAC 指针认证，只有 MSHookMessageEx 能安全替换 IMP；
@@ -607,10 +710,13 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     // swizzle 就多一分触发其完整性校验的风险；先把侵入面压到最小，
     // 确认 APStepInfo 这条路能通，再谈要不要加别的。
     if (isAlipay) {
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
         HBRawLog("P4_ALIPAY minimal footprint: hook APStepInfo only");
+        HBProbeLog(@"P4_ALIPAY: isAlipay=1 prog=%s bid=%@ -> hook APStepInfo only",
+                   prog ? prog : "?", bid ?: @"?");
         StepFakerTryHookAlipay();
         HBRawLog("P5_ALIPAY hook done");
-        HBRawLog("P9_DONE_ALIPAY");
+        HBProbeLog(@"P9_DONE_ALIPAY");
         return;
     }
 
