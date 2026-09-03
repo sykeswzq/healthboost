@@ -74,11 +74,11 @@ for d in debs:
         print("   dylib magic",dy[:4].hex())
         # 过滤串在 plist 里、不在二进制里 —— 之前的 VERIFY_FAIL 就是查错了文件
         pt=files.get("./Library/MobileSubstrate/DynamicLibraries/StepFaker.plist",b"").decode("utf-8","replace")
-        for s in ["AlipayWallet","com.alipay.iphoneclient","com.tencent.xin","WeChat"]:
+        # 不再要求 Executables（v1.0.169 已去掉，改用纯 Bundle ID 过滤）
+        # 只检查 Bundle ID 必须存在
+        for s in ["com.alipay.iphoneclient","com.tencent.xin"]:
             has=s in pt; print("   plist has %-24s %s"%(s,has)); ok=ok and has
-        has_alipay = "<string>Alipay</string>" in pt
-        has_wallet = "<string>AlipayWallet</string>" in pt
-        # 同时包含 Alipay 和 AlipayWallet 是安全的（历史版本 ff60684 就是这样）
-        # 不同 iOS/支付宝版本可能用不同的进程名，两个都写确保兼容性
-        print("   plist has Alipay %s, AlipayWallet %s"%(has_alipay, has_wallet))
+        has_wechat = "WeChat" in pt
+        has_alipay_exec = "<string>Alipay</string>" in pt or "<string>AlipayWallet</string>" in pt
+        print("   plist has WeChat(exec) %s, has Alipay exe fallback %s"%(has_wechat, has_alipay_exec))
 print("\nVERIFY_OK" if ok else "\nVERIFY_FAIL")
