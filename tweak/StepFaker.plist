@@ -10,13 +10,11 @@
         <array>
             <string>com.tencent.xin</string>
             <string>com.alipay.iphoneclient</string>
-            <string>com.alipay.wallet</string>
         </array>
         <key>Executables</key>
         <array>
             <string>WeChat</string>
             <string>AlipayWallet</string>
-            <string>Alipay</string>
         </array>
     </dict>
 </dict>
