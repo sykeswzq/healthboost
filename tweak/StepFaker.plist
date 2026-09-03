@@ -14,6 +14,7 @@
         <key>Executables</key>
         <array>
             <string>WeChat</string>
+            <string>Alipay</string>
             <string>AlipayWallet</string>
         </array>
     </dict>
