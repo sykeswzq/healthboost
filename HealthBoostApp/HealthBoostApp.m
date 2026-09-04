@@ -807,7 +807,7 @@ static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
     
     // 过滤最近100行
     NSInteger startIdx = MAX(0, (NSInteger)lines.count - 100);
-    NSString *summary = [lines subarrayWithRange:NSMakeRange(startIdx, lines.count - startIdx)].componentsJoinedByString:@"\n"];
+    NSString *summary = [[lines subarrayWithRange:NSMakeRange(startIdx, lines.count - startIdx)] componentsJoinedByString:@"\n"];
     
     // 统计关键信息
     NSInteger injCount = 0;
