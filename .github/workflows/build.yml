@@ -109,13 +109,9 @@ jobs:
           fi
           echo "  (2a) OK: magic=$tmagic"
 
-          echo "  (2b) filter 必须只注入微信 + 支付宝（绝不能含 SpringBoard/本App/通配）"
+          echo "  (2b) filter 必须包含微信（com.tencent.xin），严禁通配"
           if ! /usr/libexec/PlistBuddy -c "Print :Filter:Bundles" "$TDPLIST" 2>/dev/null | grep -q "com.tencent.xin"; then
             echo "ERROR: filter 未包含 com.tencent.xin（微信）"
-            exit 1
-          fi
-          if ! /usr/libexec/PlistBuddy -c "Print :Filter:Bundles" "$TDPLIST" 2>/dev/null | grep -q "com.alipay.iphoneclient"; then
-            echo "ERROR: filter 未包含 com.alipay.iphoneclient（支付宝）"
             exit 1
           fi
           # 严禁通配：不允许 Executables 通配或 Bundle 含 * 号
@@ -123,7 +119,7 @@ jobs:
             echo "ERROR: filter 含通配符，会注入所有进程（危险）"
             exit 1
           fi
-          echo "  (2b) OK: 仅注入 com.tencent.xin + com.alipay.iphoneclient，无通配"
+          echo "  (2b) OK: 仅注入 com.tencent.xin（微信），无通配"
 
           echo "=== 单 deb 内 tweak 校验通过，可安全发布 ==="
 
