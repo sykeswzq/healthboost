@@ -1,14 +1,11 @@
-// StepFaker —— 干净的注入式 tweak（安全探测版 1.0.136，补全 CoreMotion 入口探针）
+// StepFaker —— 干净的注入式 tweak（微信步数伪造）
 //
 // 设计：
 //  - 仅注入 com.tencent.xin（微信）。
-//  - 已知稳定可用的伪造逻辑（来自 1.0.131，微信已验证可用）：
-//      * 微信：CMPedometerData.numberOfSteps
-//      * 支付宝：HKStatistics sumQuantity/averageQuantity + HKSampleQuery
-//  - 探测：只 hook 唯一的总入口 HKHealthStore executeQuery:（所有 HealthKit 查询都从这里过）
-//          以及 HKQuantityType quantityTypeForIdentifier:，只记录、不篡改。
-//          这样既能看到支付宝实际调了哪类查询（HKStatisticsCollectionQuery / HKSourceQuery /
-//          HKAnchoredObjectQuery / HKStatisticsQuery ...），又把 swizzle 数量压到最低，避免闪退。
+//  - 微信步数伪造逻辑（已验证可用）：
+//      * CMPedometerData.numberOfSteps（主通道）
+//      * HKStatistics sumQuantity/averageQuantity（备用通道）
+//      * HKSampleQuery 逐样本查询（备用通道）
 //  - 日志写到两处：全局 /var/mobile/hb_probe_<bundle>.log（最好找）+ App 沙盒 Documents/hb_probe.log。
 //  - 所有文件写入都在主线程起来之后进行，constructor 内不做任何 IO，避免极早期 IO 引发不稳。
 //
@@ -38,18 +35,15 @@
 // ----------------------------------------------------------------------------
 // 为什么必须改：arm64e（iPhone 14 Pro 的 A16）带 PAC 指针认证。objc_msgSend
 // 派发方法时会对 IMP 做 ptrauth 校验，直接把裸 C 函数指针塞给
-// method_setImplementation，签名不符就会崩 —— 表现为支付宝一注入就闪退。
-// 实测取证：搬运工源里可用的「支付宝修改步数」(StepCount.dylib) 其未定义
-// 符号里明确带 _MSHookMessageEx，而它能在 arm64e 上正常跑。
-// CI（macOS runner）没有 CydiaSubstrate 可链接，故用 dlsym 在运行时解析；
+// method_setImplementation，签名不符就会崩。
+// 实测取证：搬运工源里可用的步数修改插件其未定义符号里明确带 _MSHookMessageEx，
+// 而它能在 arm64e 上正常跑。CI（macOS runner）没有 CydiaSubstrate 可链接，故用 dlsym 在运行时解析；
 // 设备上 Substrate/ElleKit 必然已加载，能取到；取不到再回退原生 runtime。
 // ============================================================================
 typedef void (*HBMSHookMessageExFn)(Class cls, SEL sel, IMP hook, IMP *old);
 static HBMSHookMessageExFn HBMSHook = NULL;
 
-// 宿主进程标识。支付宝的整套 hook（含方案 A 的动态兜底）只允许在支付宝进程里装。
-// 微信分支末尾也会调到 StepFakerTryHookAlipay()，没有这个闸门的话，
-// 动态扫描会把微信自己的类当成「App 自有类」一并 hook —— 那是 1.0.166 微信闪退的根因。
+// 宿主进程标识。
 
 // 统一的安全 hook 入口。成功返回 YES，并回填原实现到 origOut。
 static BOOL HBHookInstance(Class cls, SEL sel, IMP replacement, IMP *origOut) {
@@ -134,7 +128,7 @@ static void HBParseStepsFile(NSString *path, NSInteger *outVal, BOOL *outFresh) 
 // v1.0.202：文件值 = 当前目标，不限「今天」；日期只进日志。
 static NSInteger HBReadFakeSteps(void) {
     @autoreleasepool {
-        // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入；支付宝容器一般没有）
+        // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入）
         NSInteger fileVal = 0;
         BOOL fileFresh = NO;
         NSString *filePath = nil;
@@ -145,9 +139,9 @@ static NSInteger HBReadFakeSteps(void) {
             filePath = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
             HBParseStepsFile(filePath, &fileVal, &fileFresh);
         }
-        // ② 共享通道（v1.0.164 新增）：App 把假步数统一写到用户 home 的
-        //    /var/mobile/Documents/hb_steps.txt，任何进程（含支付宝）都能直接读到，
-        //    不依赖各 App 自身沙盒容器。这是支付宝拿到假值的唯一可靠来源。
+        // ② 共享通道：App 把假步数统一写到用户 home 的
+        //    /var/mobile/Documents/hb_steps.txt，任何进程都能直接读到，
+        //    不依赖各 App 自身沙盒容器。
         NSInteger sharedVal = 0;
         BOOL sharedFresh = NO;
         HBParseStepsFile(@"/var/mobile/Documents/hb_steps.txt", &sharedVal, &sharedFresh);
@@ -183,8 +177,6 @@ static NSInteger HBReadFakeSteps(void) {
         NSInteger result = (fileValEffective > 0) ? fileValEffective : cfVal;
         HBProbeLog(@"READ_FAKE: sharedFile=%ld(today=%d) selfFile=%ld(today=%d) cfPref=%ld(today=%d) -> using=%ld",
                    (long)sharedVal, sharedFresh, (long)fileVal, fileFresh, (long)cfVal, cfFresh, (long)result);
-        // 防御：99999 是支付宝的异常/兜底哨兵值（非用户真实意图）；>200000 视为离谱脏值。
-        // 正常伪造步数（含 9万~20万）不受影响，仅拦截确切 99999 与明显异常值。
         if (result == 99999 || result > 200000 || result <= 0) {
             HBProbeLog(@"READ_FAKE_IGNORE: value=%ld 疑似残留脏值/哨兵，跳过伪造（显示真实步数）", (long)result);
             return 0;
@@ -199,7 +191,7 @@ static NSInteger HBReadFakeSteps(void) {
 // 为什么必须有它：constructor 是 dyld 的 initializer，运行在 App 的 main()
 // 之前。那个阶段 Foundation（NSDateFormatter / NSProcessInfo / NSFileManager /
 // NSLog）可能尚未初始化完毕，调用它们会在部分 App 里直接崩溃。
-// 之前 HBProbeLog 就是靠这些 Foundation API 写日志的，于是一旦在支付宝的
+// 之前 HBProbeLog 就是靠这些 Foundation API 写日志的，于是一旦在
 // constructor 阶段触发，进程当场挂掉、一个字都写不出来 —— 表现为
 // 「一注入就闪退 + 完全没有任何日志」，极易被误判成「根本没注入」。
 // 这里只用 open/write/close/gettimeofday/getprogname，零 ObjC 依赖，
@@ -245,7 +237,7 @@ static void HBRawLog(const char *fmt, ...) {
     line[total++] = '\n';
     line[total] = '\0';
 
-    // 写两处：按进程名那份（便于区分微信/支付宝）+ 固定名兜底（路径算不出来也能找到）
+    // 写两处：按进程名那份（便于区分微信/其他进程）+ 固定名兜底（路径算不出来也能找到）
     HBRawWritePath(g_rawPath, line, (size_t)total);
     HBRawWritePath("/var/mobile/hb_probe_raw.log", line, (size_t)total);
 }
@@ -330,7 +322,7 @@ static NSNumber *new_numberOfSteps(id self, SEL _cmd) {
     return orig_numberOfSteps(self, _cmd);
 }
 
-// 路径二：HKStatistics 聚合查询（支付宝，1.0.131）
+// 路径二：HKStatistics 聚合查询（备用通道）
 static id (*orig_sumQ)(id, SEL) = NULL;
 static id new_sumQ(id self, SEL _cmd) {
     if (HBIsStepType([self quantityType])) {
@@ -365,7 +357,7 @@ static id new_avgQ(id self, SEL _cmd) {
     return orig_avgQ(self, _cmd);
 }
 
-// 路径三：HKSampleQuery 逐样本查询（支付宝，1.0.131）
+// 路径三：HKSampleQuery 逐样本查询（备用通道）
 static id (*orig_SQ_init)(id, SEL, id, id, unsigned long, id, id) = NULL;
 static id new_SQ_init(id self, SEL _cmd,
                       id type, id pred, unsigned long limit, id sorts, id handler) {
@@ -398,37 +390,6 @@ static id new_SQ_init(id self, SEL _cmd,
     return orig_SQ_init(self, _cmd, type, pred, limit, sorts, handler);
 }
 
-// 与微信的 CMPedometerData 不同，支付宝用自己的内部类承载步数显示值。
-static long long (*orig_apSteps)(id, SEL) = NULL;
-static long long new_apSteps(id self, SEL _cmd) {
-    NSInteger fake = HBReadFakeSteps();
-    if (fake > 0) {
-        static BOOL apLogged = NO;
-        if (!apLogged) {
-            apLogged = YES;
-                    }
-        return (long long)fake;
-    }
-    return orig_apSteps ? orig_apSteps(self, _cmd) : 0;
-}
-
-// 为什么要连 setter 一起 hook：支付宝可能是「先算出步数 → setNumberOfSteps: 存进 ivar →
-// 之后直接读 ivar」的用法。那种情况下只 hook getter 会被彻底绕过，步数纹丝不动。
-// 现成的「支付宝修改步数」(StepCount.dylib) 就是 getter + setter 一起 hook 的。
-// 两边都兜住，无论它走 getter 还是读 ivar，拿到的都是假值。
-static void (*orig_setApSteps)(id, SEL, long long) = NULL;
-static void new_setApSteps(id self, SEL _cmd, long long steps) {
-    NSInteger fake = HBReadFakeSteps();
-    if (fake > 0) {
-        static BOOL apSetLogged = NO;
-        if (!apSetLogged) {
-            apSetLogged = YES;
-                    }
-        steps = (long long)fake;   // 连写入的值一起改掉，覆盖直接读 ivar 的路径
-    }
-    if (orig_setApSteps) orig_setApSteps(self, _cmd, steps);
-}
-
 // ===== 探测（仅记录，不篡改）：唯一总入口 + 类型工厂 =====
 static void (*orig_execQ)(id, SEL, id) = NULL;
 static void new_execQ(id self, SEL _cmd, id query) {
@@ -450,8 +411,8 @@ static id new_QTForId(Class self, SEL _cmd, NSString *identifier) {
 }
 
 // ===== 探测（仅记录，不篡改）：CoreMotion 步数入口 =====
-// 微信/支付宝可能走 CoreMotion 而非 HealthKit；加这组日志型 hook，
-// 只记录调用了哪个入口 + 返回值，便于定位 支付宝 的真实路径（不猜接口）。
+// 微信可能走 CoreMotion 而非 HealthKit；加这组日志型 hook，
+// 只记录调用了哪个入口 + 返回值，便于定位真实路径（不猜接口）。
 static void (*orig_queryPed)(id, SEL, id, id, id) = NULL;
 static void new_queryPed(id self, SEL _cmd, id from, id to, id handler) {
     HBProbeLog(@"CMPedometer.queryPedometerDataFromDate:toDate:withHandler: called");
@@ -582,175 +543,6 @@ static void StepFakerTryHookProbe(void) {
     probeDone = YES;
 }
 
-// ===== 方案 A2/A3：动态扫描命中类的「通用兜底 hook」 =====
-// orig 必须按类分别保存，否则后 hook 的类会覆盖前面类的 orig，
-// 一旦假值关闭（fake==0）就会跳到错误的原始实现 -> 崩溃。
-// 这里用一张小表按类存 orig，查不到时沿 superclass 向上找（兼容 KVO 子类）。
-#define HB_DYN_MAX 64
-
-// 本文件用 -fobjc-arc 编译：结构体成员必须显式 __unsafe_unretained，
-// 否则 ARC 会拒绝「结构体持有可保留对象指针」。
-typedef struct { Class __unsafe_unretained cls; long long (*orig)(id, SEL); } HBDynGetter;
-typedef struct { Class __unsafe_unretained cls; void (*orig)(id, SEL, long long); } HBDynSetter;
-
-static HBDynGetter g_dynGetters[HB_DYN_MAX];
-static int  g_dynGetterCount = 0;
-static HBDynSetter g_dynSetters[HB_DYN_MAX];
-static int  g_dynSetterCount = 0;
-
-static long long (*HBDynGetterOrigFor(id self))(id, SEL) {
-    Class c = object_getClass(self);
-    while (c) {
-        for (int i = 0; i < g_dynGetterCount; i++) {
-            if (g_dynGetters[i].cls == c) return g_dynGetters[i].orig;
-        }
-        c = class_getSuperclass(c);
-    }
-    return NULL;
-}
-
-static void (*HBDynSetterOrigFor(id self))(id, SEL, long long) {
-    Class c = object_getClass(self);
-    while (c) {
-        for (int i = 0; i < g_dynSetterCount; i++) {
-            if (g_dynSetters[i].cls == c) return g_dynSetters[i].orig;
-        }
-        c = class_getSuperclass(c);
-    }
-    return NULL;
-}
-
-// 幂等保护：动态兜底这一趟可能被重复执行（支付宝的类是懒加载的，要复查）。
-// 若不查重，第二次 hook 同一个类时拿到的 "orig" 会是我们自己上一次装进去的 IMP，
-// 调用链变成 new_dynApSteps -> new_dynApSteps -> ... 无限递归直接栈溢出。
-static BOOL HBDynHasGetter(Class c) {
-    for (int i = 0; i < g_dynGetterCount; i++) if (g_dynGetters[i].cls == c) return YES;
-    return NO;
-}
-static BOOL HBDynHasSetter(Class c) {
-    for (int i = 0; i < g_dynSetterCount; i++) if (g_dynSetters[i].cls == c) return YES;
-    return NO;
-}
-
-// 名称白名单：动态兜底只认「名字里带步数语义」的类。
-// 单靠方法签名（numberOfSteps 返回 long long）去筛，在支付宝这种体量的 App 里
-// 会命中一堆完全无关的类，挂上假步数 getter 后返回 15183 这种值，越界就崩
-// （1.0.166 的微信闪退就是这个机理）。加上名称过滤后，
-// 抗改名能力基本不变（改名后仍会带 Step/Walk/Sport 等词根），误伤面却小得多。
-static BOOL HBDynClassNameLooksLikeSteps(Class c) {
-    if (!c) return NO;
-    const char *n = class_getName(c);
-    if (!n) return NO;
-    // 转小写后匹配，避免大小写差异
-    size_t len = strlen(n);
-    char lower[256];
-    if (len >= sizeof(lower)) len = sizeof(lower) - 1;
-    for (size_t i = 0; i < len; i++) {
-        lower[i] = (n[i] >= 'A' && n[i] <= 'Z') ? (char)(n[i] + 32) : n[i];
-    }
-    lower[len] = '\0';
-    static const char *keys[] = { "step", "walk", "sport", "pedometer", "health", "motion", NULL };
-    for (int i = 0; keys[i]; i++) {
-        if (strstr(lower, keys[i]) != NULL) return YES;
-    }
-    return NO;
-}
-static long long new_dynApSteps(id self, SEL _cmd) {
-    NSInteger fake = HBReadFakeSteps();
-    if (fake > 0) {
-        static BOOL dynLogged = NO;
-        if (!dynLogged) {
-            dynLogged = YES;
-            HBProbeLog(@"DYN_FAKE: dynamic numberOfSteps -> fake=%ld on class=%@",
-                       (long)fake, NSStringFromClass([self class]));
-        }
-        return (long long)fake;
-    }
-    long long (*o)(id, SEL) = HBDynGetterOrigFor(self);
-    return o ? o(self, _cmd) : 0;
-}
-
-static void new_dynSetApSteps(id self, SEL _cmd, long long steps) {
-    NSInteger fake = HBReadFakeSteps();
-    if (fake > 0) {
-        static BOOL dynSetLogged = NO;
-        if (!dynSetLogged) {
-            dynSetLogged = YES;
-            HBProbeLog(@"DYN_SET_FAKE: dynamic setNumberOfSteps: %lld -> %ld on class=%@",
-                       steps, (long)fake, NSStringFromClass([self class]));
-        }
-        steps = (long long)fake;
-    }
-    void (*o)(id, SEL, long long) = HBDynSetterOrigFor(self);
-    if (o) o(self, _cmd, steps);
-}
-
-// 系统类一律跳过：支付宝自己的类在 App 包内，系统框架在 /System/Library 下。
-// 只 hook App 自己的类，把注入面（以及对支付宝完整性校验的刺激）压到最小。
-static BOOL HBIsAppOwnedClass(Class cls) {
-    if (!cls) return NO;
-    const char *img = class_getImageName(cls);
-    if (!img || img[0] == '\0') return NO;
-    if (strstr(img, "/System/Library/") != NULL) return NO;
-    if (strstr(img, "/usr/lib/")       != NULL) return NO;
-    if (strstr(img, "/var/jb/")        != NULL) return NO;
-    return YES;
-}
-// ===== 方案 A+B：支付宝步数类自动探测 + 全量扫描兜底 =====
-static void HBLogInjectScanForAlipayClasses(void) {
-    unsigned int count = 0;
-    Class *classes = objc_copyClassList(&count);
-    if (!classes) return;
-
-    static Class numStepsCandidates[200];
-    static Class setNumStepsCandidates[200];
-    int numCount = 0, setCount = 0;
-
-    for (unsigned int i = 0; i < count; i++) {
-        Class cls = classes[i];
-        if (!cls) continue;
-
-        Method m = class_getInstanceMethod(cls, @selector(numberOfSteps));
-        if (m && numCount < 200) {
-            const char *enc = method_getTypeEncoding(m);
-            if (enc && enc[0] == 'q') {
-                numStepsCandidates[numCount++] = cls;
-                HBProbeLog(@"SCAN_FOUND_numberOfSteps: class=%s enc=%s",
-                           NSStringFromClass(cls).UTF8String, enc);
-            }
-        }
-
-        Method sm = class_getInstanceMethod(cls, @selector(setNumberOfSteps:));
-        if (sm && setCount < 200) {
-            const char *se = method_getTypeEncoding(sm);
-            if (se && strchr(se, 'q')) {
-                setNumStepsCandidates[setCount++] = cls;
-                HBProbeLog(@"SCAN_FOUND_setNumberOfSteps: class=%s enc=%s",
-                           NSStringFromClass(cls).UTF8String, se);
-            }
-        }
-    }
-    free(classes);
-
-    {
-        FILE *f = fopen("/var/mobile/Documents/hb_inject.log", "a");
-        if (f) {
-            fprintf(f, "\n[SCAN] numberOfSteps candidates (%d):\n", numCount);
-            for (int i = 0; i < numCount; i++) {
-                Method m = class_getInstanceMethod(numStepsCandidates[i], @selector(numberOfSteps));
-                const char *enc = m ? method_getTypeEncoding(m) : "?";
-                fprintf(f, "  - %s  enc=%s\n", NSStringFromClass(numStepsCandidates[i]).UTF8String, enc);
-            }
-            fprintf(f, "[SCAN] setNumberOfSteps: candidates (%d):\n", setCount);
-            for (int i = 0; i < setCount; i++) {
-                Method sm = class_getInstanceMethod(setNumStepsCandidates[i], @selector(setNumberOfSteps:));
-                const char *se = sm ? method_getTypeEncoding(sm) : "?";
-                fprintf(f, "  - %s  enc=%s\n", NSStringFromClass(setNumStepsCandidates[i]).UTF8String, se);
-            }
-            fclose(f);
-        }
-    }
-}
 
 
 __attribute__((constructor)) static void StepFakerInit(void) {
@@ -767,12 +559,11 @@ __attribute__((constructor)) static void StepFakerInit(void) {
              safeMode, safeMode ? "exists -> skip ALL hooks" : "absent");
 
     // ---- P2：识别宿主进程（纯 POSIX，不用 NSBundle）----
-        // 把 HKSampleQuery 等假样本 hook 全装上，支付宝累加后截断成 99999。
-    const char *prog = getprogname();    // 同步到文件级开关：支付宝 hook 的入口闸门读的是它。
-    // 只用局部变量的话，微信进程照样能装支付宝那套动态 hook。    HBRawLog("P2_PROG=%s", prog ? prog : "?");
+    const char *prog = getprogname();    // 同步到文件级开关：入口闸门读的是它。
+    HBRawLog("P2_PROG=%s", prog ? prog : "?");
 
     // 注入诊断（v1.0.200）：增强版
-    // 1) 确认 dylib 是否真的加载进支付宝进程
+    // 1) 确认 dylib 是否真的加载进目标进程
     // 2) 同时写到 /var/mobile/Documents/ 和 /var/mobile/ 根（rootless 下均可写）
     // 3) 写入后确认日志是否成功，方便区分「没注入」vs「注入但写不了日志」
     {

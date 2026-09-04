@@ -98,7 +98,7 @@ static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NS
 //   2) CFPreferences com.apple.mobile.healthboost —— 兜底。
 // 这一步与写 HealthKit 是两条独立链路：HealthKit 管「健康」App，这里管「微信运动」。
 // 步数文件统一格式：第一行数字，第二行 date:YYYY-MM-DD（v1.0.201 起必带）。
-// tweak 端据此做「今天」校验，昨天的残留值不再被微信/支付宝读走。
+// tweak 端据此做「今天」校验，昨天的残留值不再被微信读走。
 static NSString *HBFakeDateLine(void) {
     NSDateFormatter *f = [[NSDateFormatter alloc] init];
     f.dateFormat = @"yyyy-MM-dd";
@@ -117,8 +117,8 @@ static void HBWriteStepsFile(long steps) {
     HBLog(@"[HealthBoost] 已写入步数文件 %ld (file=%d) @ %@", steps, ok, path);
 }
 
-// 找到微信/支付宝相关进程的数据容器路径。
-// 原理：微信、支付宝都是 App Store 应用，跑在沙盒里，**读不到** /var/mobile/Media/ 下的文件。
+// 找到微信相关进程的数据容器路径。
+// 原理：微信是 App Store 应用，跑在沙盒里，**读不到** /var/mobile/Media/ 下的文件。
 // 但本 App 带 no-sandbox 权限，可以直接把步数文件写进它们自己的容器，
 // 各自进程对自己容器内的文件是必定可读的 —— 这是绕开沙盒最可靠的通道。
 // iOS 在每个数据容器根目录放 .com.apple.mobile_container_manager.metadata.plist，
@@ -182,7 +182,7 @@ static NSInteger HBWriteStepsToWeChatContainers(long steps) {
         NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
         // v1.0.161：写之前先删旧文件，避免残留脏值（如早期测试写下的 99999）覆盖不彻底
         if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
-        // 用 NSData 写并设 0644，确保微信/支付宝进程（mobile 用户）可读
+        // 用 NSData 写并设 0644，确保微信进程（mobile 用户）可读
         BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
         if (ok) {
             [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
@@ -221,7 +221,7 @@ static void HBWriteStepsPreference(long steps) {
           (long)nContainers, (long)nVarMobile, ok, steps);
 }
 
-// 清除所有「供微信/支付宝读取」的步数假数据，让这些 App 恢复读取真实步数。
+// 清除所有「供微信读取」的步数假数据，让微信恢复读取真实步数。
 // 在用户关闭「每日自动生成」时调用：既然不再自动生成，就不应继续伪造。
 static void HBClearStepsFiles(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -240,7 +240,7 @@ static void HBClearStepsFiles(void) {
     CFPreferencesSetValue(CFSTR("steps"), NULL, CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
     CFPreferencesSetValue(CFSTR("stepsDate"), NULL, CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
     CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
-    HBLog(@"[HealthBoost] 已清空 CFPreferences 步数，微信/支付宝恢复真实步数");
+    HBLog(@"[HealthBoost] 已清空 CFPreferences 步数，微信恢复真实步数");
 }
 
 // 扫描所有数据容器，收集 tweak 写下的诊断日志。
@@ -497,24 +497,37 @@ static NSString *HBTodayString(void) {
 }
 
 // v1.0.203 修复「每次打开都弹授权框」：
-// 问题根因：在 getNotificationSettings 回调里调用 requestAuthorization，
-// iOS 17+ 可能不响应，导致授权状态永远卡在 NotDetermined。
-// 修复方案：直接先请求授权，再读取状态，这样系统弹窗正常触发。
+// 问题根因：每次都调用 requestAuthorization，系统会重复弹窗。
+// 修复方案：用 NSUserDefaults 持久化记录「是否已请求过」，仅首次启动时弹窗。
 static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
+static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (void)setupNotifications {
     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
     c.delegate = self;
     
-    // 直接请求授权（不依赖 getNotificationSettings 回调）
+    // 检查是否已经请求过授权（持久化标记，跨重启保留）
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    BOOL alreadyRequested = [defaults boolForKey:HBNotifRequestedKey];
+    if (alreadyRequested) {
+        HBLog(@"[UCS] 通知权限已请求过，跳过弹窗");
+        return;
+    }
+    
+    // 直接请求授权
     [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound|UNAuthorizationOptionBadge
                     completionHandler:^(BOOL g, NSError *e){
+        // 标记已请求（无论成功失败）
+        [defaults setBool:YES forKey:HBNotifRequestedKey];
+        [defaults synchronize];
+        
         if (g) {
             HBLog(@"[UCS] 通知授权成功");
-            [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:HBNotifFailCountKey];
+            [defaults setInteger:0 forKey:HBNotifFailCountKey];
+            [defaults synchronize];
         } else {
-            NSInteger failCount = [[NSUserDefaults standardUserDefaults] integerForKey:HBNotifFailCountKey] + 1;
-            [[NSUserDefaults standardUserDefaults] setInteger:failCount forKey:HBNotifFailCountKey];
-            [[NSUserDefaults standardUserDefaults] synchronize];
+            NSInteger failCount = [defaults integerForKey:HBNotifFailCountKey] + 1;
+            [defaults setInteger:failCount forKey:HBNotifFailCountKey];
+            [defaults synchronize];
             HBLog(@"[UCS] 通知授权失败 attempt=%ld err=%@", (long)failCount, e ? e.localizedDescription : @"nil");
             // 失败超过3次，静默跳过
             if (failCount >= 3) {
@@ -608,7 +621,7 @@ static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
             [self saveSettings];
             // v1.0.202 修复「昨天 1000 今天仍 1000」的根因：旧版改设置只存了偏好、
             // 不写步数文件，文件里一直留着上次生成的旧值。现在保存即写入所有通道，
-            // 微信/支付宝立刻读到新目标（微信下次查询就生效，无需等每日生成）。
+            // 微信立刻读到新目标（微信下次查询就生效，无需等每日生成）。
             HBWriteStepsPreference(v);
             [self updateStatus:[NSString stringWithFormat:@"已生效：目标步数 %ld（微信下次刷新可见）", v]];
             [self.tableView reloadData];
@@ -703,7 +716,7 @@ static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
     if (self.scheduleOn) [self scheduleDailyNotification];
     else {
         [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifiers:@[@"UCSDailyGen"]];
-        HBClearStepsFiles();   // 关闭定时：清掉微信/支付宝的假步数，恢复真实
+        HBClearStepsFiles();   // 关闭定时：清掉微信的假步数，恢复真实
     }
     [self updateStatus:self.scheduleOn ? [NSString stringWithFormat:@"已开启每日 %02ld:%02ld 定时生成", (long)self.schedHour, (long)self.schedMinute] : @"已关闭定时"];
 }
@@ -741,10 +754,6 @@ static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
 
 #pragma mark - Settings
 
-// 诊断（v1.0.164）：用 LSApplicationWorkspace 找出设备上「支付宝类」App 的确切 Bundle id 与可执行文件名，
-// 写到 hb_log.txt（用户可直接取）。这能确认 dylib 的 plist 过滤到底该匹配哪个 id/名字——
-// 当前怀疑支付宝 99999 修不好的根因是 dylib 没注入进支付宝（过滤未命中）。
-// v1.0.203 移除支付宝诊断功能
 - (void)loadSettings {
     NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:HBSettingsKey];
     if (!d) d = @{@"enabled":@YES, @"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};

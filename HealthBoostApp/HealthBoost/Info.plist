@@ -43,7 +43,7 @@
     <key>NSHealthShareUsageDescription</key>
     <string>UCS 需要访问健康数据以生成运动记录</string>
     <key>NSHealthUpdateUsageDescription</key>
-    <string>UCS 需要写入健康数据以生成运动记录，并在微信/支付宝中同步显示步数</string>
+    <string>UCS 需要写入健康数据以生成运动记录，并在微信中同步显示步数</string>
     <key>UIDeviceFamily</key>
     <array>
         <integer>1</integer>
