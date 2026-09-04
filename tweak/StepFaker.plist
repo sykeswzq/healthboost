@@ -8,13 +8,12 @@
         <string>Any</string>
         <key>Executables</key>
         <array>
-            <string>Alipay</string>
-            <string>AlipayWallet</string>
+            <string>WeChat</string>
+            <string>com.tencent.xin</string>
         </array>
         <key>Bundles</key>
         <array>
             <string>com.tencent.xin</string>
-            <string>com.alipay.iphoneclient</string>
         </array>
     </dict>
 </dict>

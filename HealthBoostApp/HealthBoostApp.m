@@ -140,10 +140,9 @@ static NSArray<NSString *> *HBWeChatContainerPaths(void) {
         // 避免因为猜错「到底哪个进程在读步数」而漏掉真正的目标。
         if ([ident isEqualToString:@"com.tencent.xin"] ||
             [ident isEqualToString:@"UGGD"] ||
-            [ident hasPrefix:@"com.tencent"] ||
-            [ident isEqualToString:@"com.alipay.iphoneclient"]) {
+            [ident hasPrefix:@"com.tencent"]) {
             [out addObject:[base stringByAppendingPathComponent:d]];
-            HBLog(@"[HealthBoost] 找到微信/支付宝相关容器: %@ -> %@", ident, d);
+            HBLog(@"[HealthBoost] 找到微信相关容器: %@ -> %@", ident, d);
         }
     }
     return out;
@@ -455,7 +454,6 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     self.tableView.tableFooterView = self.statusLabel;
 
     [self loadSettings];
-    [self diagnoseAlipayTarget];
     [self setupNotifications];
     if (self.scheduleOn) [self scheduleDailyNotification];
 
@@ -498,48 +496,31 @@ static NSString *HBTodayString(void) {
     [self generateNow];
 }
 
-// v1.0.202 修复「每次打开都弹授权框」：
-// 原因：上一次授权失败（e != nil）或者授权被静默拒绝（granted=NO），
-// 状态会卡在 NotDetermined 或 Denied 边缘，系统会反复弹框让用户重新选择。
-// 修复：记录授权失败次数到 NSUserDefaults，超过阈值则改为静默跳过；
-// 同时增加「强制刷新授权状态」逻辑，避免残留脏数据。
+// v1.0.203 修复「每次打开都弹授权框」：
+// 问题根因：在 getNotificationSettings 回调里调用 requestAuthorization，
+// iOS 17+ 可能不响应，导致授权状态永远卡在 NotDetermined。
+// 修复方案：直接先请求授权，再读取状态，这样系统弹窗正常触发。
 static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
 - (void)setupNotifications {
     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
     c.delegate = self;
     
-    // 先清除可能残留的失败计数（每次启动重置，避免累积误判）
-    [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:HBNotifFailCountKey];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    
-    [c getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings){
-        UNAuthorizationStatus st = settings.authorizationStatus;
-        HBLog(@"[UCS] 通知权限状态=%ld (0=NotDetermined 1=Denied 2=Authorized 3=Provisional 4=Ephemeral)",
-              (long)st);
-        if (st != UNAuthorizationStatusNotDetermined) {
-            HBLog(@"[UCS] 通知已决定(非NotDetermined)，跳过弹窗");
-            return;
-        }
-        
-        // 检查历史失败次数
-        NSInteger failCount = [[NSUserDefaults standardUserDefaults] integerForKey:HBNotifFailCountKey];
-        if (failCount >= 3) {
-            HBLog(@"[UCS] 通知授权失败%d次，跳过自动请求", (int)failCount);
-            return;
-        }
-        
-        [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound|UNAuthorizationOptionBadge
-                        completionHandler:^(BOOL g, NSError *e){
-            if (g) {
-                HBLog(@"[UCS] 通知授权成功");
-                [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:HBNotifFailCountKey];
-            } else {
-                NSInteger newCount = failCount + 1;
-                [[NSUserDefaults standardUserDefaults] setInteger:newCount forKey:HBNotifFailCountKey];
-                [[NSUserDefaults standardUserDefaults] synchronize];
-                HBLog(@"[UCS] 通知授权失败 attempt=%ld err=%@", (long)newCount, e ? e.localizedDescription : @"nil");
+    // 直接请求授权（不依赖 getNotificationSettings 回调）
+    [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound|UNAuthorizationOptionBadge
+                    completionHandler:^(BOOL g, NSError *e){
+        if (g) {
+            HBLog(@"[UCS] 通知授权成功");
+            [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:HBNotifFailCountKey];
+        } else {
+            NSInteger failCount = [[NSUserDefaults standardUserDefaults] integerForKey:HBNotifFailCountKey] + 1;
+            [[NSUserDefaults standardUserDefaults] setInteger:failCount forKey:HBNotifFailCountKey];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            HBLog(@"[UCS] 通知授权失败 attempt=%ld err=%@", (long)failCount, e ? e.localizedDescription : @"nil");
+            // 失败超过3次，静默跳过
+            if (failCount >= 3) {
+                HBLog(@"[UCS] 通知授权连续失败3次，后续启动不再请求");
             }
-        }];
+        }
     }];
 }
 
@@ -763,29 +744,7 @@ static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
 // 诊断（v1.0.164）：用 LSApplicationWorkspace 找出设备上「支付宝类」App 的确切 Bundle id 与可执行文件名，
 // 写到 hb_log.txt（用户可直接取）。这能确认 dylib 的 plist 过滤到底该匹配哪个 id/名字——
 // 当前怀疑支付宝 99999 修不好的根因是 dylib 没注入进支付宝（过滤未命中）。
-- (void)diagnoseAlipayTarget {
-    Class LSAW = NSClassFromString(@"LSApplicationWorkspace");
-    if (!LSAW) { HBLog(@"[DIAG] LSApplicationWorkspace 不可用（私有 API 未导出）"); return; }
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-    id ws = [LSAW performSelector:NSSelectorFromString(@"defaultWorkspace")];
-    if (!ws) { HBLog(@"[DIAG] defaultWorkspace 为空"); return; }
-    NSArray *apps = [ws performSelector:NSSelectorFromString(@"allApplications")];
-    if (!apps || apps.count == 0) { HBLog(@"[DIAG] allApplications 为空"); return; }
-    for (id app in apps) {
-        NSString *bid = [app performSelector:NSSelectorFromString(@"bundleIdentifier")];
-        if (bid && [bid rangeOfString:@"alipay" options:NSCaseInsensitiveSearch].location != NSNotFound) {
-            NSString *exec = nil;
-            @try { exec = [app performSelector:NSSelectorFromString(@"executablePath")]; } @catch (id e) { exec = nil; }
-            NSString *name = nil;
-            @try { name = [app performSelector:NSSelectorFromString(@"localizedName")]; } @catch (id e) { name = nil; }
-            HBLog(@"[DIAG] 发现支付宝类 App: bid=%@ exec=%@ name=%@", bid, exec, name);
-        }
-    }
-#pragma clang diagnostic pop
-    HBLog(@"[DIAG] 支付宝目标扫描完成");
-}
-
+// v1.0.203 移除支付宝诊断功能
 - (void)loadSettings {
     NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:HBSettingsKey];
     if (!d) d = @{@"enabled":@YES, @"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};
@@ -818,7 +777,6 @@ static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
 // v1.0.202 新增诊断功能：读取tweak注入日志并显示给用户
 - (void)showInjectionDiagnostic {
     NSString *injectLog = @"/var/mobile/Documents/hb_inject.log";
-    NSString *probeLog = @"/var/mobile/hb_probe_*.log";
     NSFileManager *fm = [NSFileManager defaultManager];
     NSMutableArray *lines = [NSMutableArray array];
     
@@ -843,7 +801,7 @@ static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
     }
     
     if (lines.count == 0) {
-        [self showAlert:@"诊断结果" message:@"未找到tweak注入日志。\n可能原因：\n1. tweak未安装或未启用\n2. 微信/支付宝未启动过\n\n请在设备上检查：\n- /var/mobile/Documents/hb_inject.log\n- /var/mobile/hb_probe_*.log"];
+        [self showAlert:@"诊断结果" message:@"未找到tweak注入日志。\n可能原因：\n1. tweak未安装或未启用\n2. 微信未启动过\n\n请在设备上检查：\n- /var/mobile/Documents/hb_inject.log\n- /var/mobile/hb_probe_*.log"];
         return;
     }
     
@@ -852,13 +810,12 @@ static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
     NSString *summary = [lines subarrayWithRange:NSMakeRange(startIdx, lines.count - startIdx)].componentsJoinedByString:@"\n"];
     
     // 统计关键信息
-    NSInteger injCount = 0, alipayCount = 0;
+    NSInteger injCount = 0;
     for (NSString *line in lines) {
         if ([line containsString:@"[INJ-V2]"]) injCount++;
-        if ([line containsString:@"isAlipay=1"]) alipayCount++;
     }
     
-    NSString *msg = [NSString stringWithFormat:@"tweak注入日志（最近%ld行）：\n\n注入次数: %ld\n支付宝注入: %ld\n\n详情：\n%@", (long)lines.count, (long)injCount, (long)alipayCount, summary];
+    NSString *msg = [NSString stringWithFormat:@"tweak注入日志（最近%ld行）：\n\n注入次数: %ld\n\n详情：\n%@", (long)lines.count, (long)injCount, summary];
     [self showAlert:@"tweak注入诊断" message:msg];
 }
 
