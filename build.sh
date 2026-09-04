@@ -19,11 +19,11 @@ set -euo pipefail
 #      （见 HealthBoost.entitlements.plist）。
 # ============================================================================
 
-# 版本号绑定 GitHub Actions 的 run 编号，每次构建自动递增，永不重复。
+# 版本号：v2.0 最终版
 if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
-  VER="1.0.${GITHUB_RUN_NUMBER}-1"
+  VER="2.0.${GITHUB_RUN_NUMBER}"
 else
-  VER="1.0.$(date +%s)-1"
+  VER="2.0.$(date +%s)"
 fi
 echo "版本号: $VER"
 PKG="com.sykes.ucs"
