@@ -138,7 +138,7 @@ Installed-Size: 1152
 Depends: firmware (>= 13.0)
 Maintainer: sykeswzq
 Author: sykeswzq
-Description: UCS - 运动数据注入工具，支持微信/支付宝步数同步。
+Description: UCS - 运动数据注入工具，支持微信步数同步。
 Section: utilities
 Priority: optional
 EOF
@@ -154,12 +154,10 @@ elif [ -x /usr/bin/uicache ]; then
   /usr/bin/uicache -a 2>/dev/null || true
   /usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
 fi
-# 装完强制杀掉微信/支付宝，让 tweak 在下次启动时加载并读取最新步数。
-# 支付宝进程名是 AlipayWallet（不是 Alipay），写错就杀不掉。
+# 装完强制杀掉微信，让 tweak 在下次启动时加载并读取最新步数。
 for k in /var/jb/bin/killall /usr/bin/killall killall; do
   if [ -x "$k" ]; then
     "$k" -9 WeChat 2>/dev/null || true
-    "$k" -9 AlipayWallet 2>/dev/null || true
     break
   fi
 done
