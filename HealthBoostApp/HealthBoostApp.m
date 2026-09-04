@@ -498,23 +498,47 @@ static NSString *HBTodayString(void) {
     [self generateNow];
 }
 
-// v1.0.201 修复「设置-通知里找不到本 App」：
-// 旧逻辑在 /var/mobile/Documents/.hb_notif_requested 放标记文件，跨重装残留，
-// 导致新装后授权状态明明是 NotDetermined 却跳过请求 —— App 从未真正请求通知
-// 权限，自然不会出现在系统设置的通知列表里。
-// 现在只要状态是 NotDetermined 就请求：用户若已允许/拒绝，状态不会是
-// NotDetermined，系统本来就不会重复弹窗，标记文件逻辑是多余且有害的。
+// v1.0.202 修复「每次打开都弹授权框」：
+// 原因：上一次授权失败（e != nil）或者授权被静默拒绝（granted=NO），
+// 状态会卡在 NotDetermined 或 Denied 边缘，系统会反复弹框让用户重新选择。
+// 修复：记录授权失败次数到 NSUserDefaults，超过阈值则改为静默跳过；
+// 同时增加「强制刷新授权状态」逻辑，避免残留脏数据。
+static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
 - (void)setupNotifications {
     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
     c.delegate = self;
+    
+    // 先清除可能残留的失败计数（每次启动重置，避免累积误判）
+    [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:HBNotifFailCountKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    
     [c getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings){
         UNAuthorizationStatus st = settings.authorizationStatus;
         HBLog(@"[UCS] 通知权限状态=%ld (0=NotDetermined 1=Denied 2=Authorized 3=Provisional 4=Ephemeral)",
               (long)st);
-        if (st != UNAuthorizationStatusNotDetermined) return;
+        if (st != UNAuthorizationStatusNotDetermined) {
+            HBLog(@"[UCS] 通知已决定(非NotDetermined)，跳过弹窗");
+            return;
+        }
+        
+        // 检查历史失败次数
+        NSInteger failCount = [[NSUserDefaults standardUserDefaults] integerForKey:HBNotifFailCountKey];
+        if (failCount >= 3) {
+            HBLog(@"[UCS] 通知授权失败%d次，跳过自动请求", (int)failCount);
+            return;
+        }
+        
         [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound|UNAuthorizationOptionBadge
                         completionHandler:^(BOOL g, NSError *e){
-            HBLog(@"[UCS] 通知授权结果 granted=%d err=%@", g, e ? e.localizedDescription : @"nil");
+            if (g) {
+                HBLog(@"[UCS] 通知授权成功");
+                [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:HBNotifFailCountKey];
+            } else {
+                NSInteger newCount = failCount + 1;
+                [[NSUserDefaults standardUserDefaults] setInteger:newCount forKey:HBNotifFailCountKey];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+                HBLog(@"[UCS] 通知授权失败 attempt=%ld err=%@", (long)newCount, e ? e.localizedDescription : @"nil");
+            }
         }];
     }];
 }
@@ -532,7 +556,8 @@ static NSString *HBTodayString(void) {
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
     if (s == 0) return 3;
     if (s == 1) return 1;
-    return 2;
+    // v1.0.202: section 2 增加「注入诊断」行
+    return 3;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -578,6 +603,12 @@ static NSString *HBTodayString(void) {
             [sw addTarget:self action:@selector(scheduleSwitchChanged:) forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = sw;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        } else if (ip.row == 1) {
+            // v1.0.202: 注入诊断入口
+            cell.imageView.image = [UIImage systemImageNamed:@"magnifyingglass"];
+            cell.textLabel.text = @"tweak注入诊断";
+            cell.detailTextLabel.text = @"查看注入状态";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         } else {
             cell.imageView.image = [UIImage systemImageNamed:@"timer"];
             cell.textLabel.text = @"生成时间";
@@ -591,11 +622,22 @@ static NSString *HBTodayString(void) {
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
     if (ip.section == 0 && ip.row == 0) {
-        [self editIntegerWithTitle:@"步数" message:@"设置每日目标步数" current:self.steps handler:^(long v){ self.steps = v; [self saveSettings]; [self.tableView reloadData]; }];
+        [self editIntegerWithTitle:@"步数" message:@"设置每日目标步数" current:self.steps handler:^(long v){
+            self.steps = v;
+            [self saveSettings];
+            // v1.0.202 修复「昨天 1000 今天仍 1000」的根因：旧版改设置只存了偏好、
+            // 不写步数文件，文件里一直留着上次生成的旧值。现在保存即写入所有通道，
+            // 微信/支付宝立刻读到新目标（微信下次查询就生效，无需等每日生成）。
+            HBWriteStepsPreference(v);
+            [self updateStatus:[NSString stringWithFormat:@"已生效：目标步数 %ld（微信下次刷新可见）", v]];
+            [self.tableView reloadData];
+        }];
     } else if (ip.section == 0 && ip.row == 2) {
         [self editIntegerWithTitle:@"楼层" message:@"设置爬楼层数" current:self.flights handler:^(long v){ self.flights = v; [self saveSettings]; [self.tableView reloadData]; }];
     } else if (ip.section == 1) {
         [self generateNow];
+    } else if (ip.section == 2 && ip.row == 0) {
+        [self showInjectionDiagnostic];
     } else if (ip.section == 2 && ip.row == 1) {
         [self pickTime];
     }
@@ -771,6 +813,53 @@ static NSString *HBTodayString(void) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
+}
+
+// v1.0.202 新增诊断功能：读取tweak注入日志并显示给用户
+- (void)showInjectionDiagnostic {
+    NSString *injectLog = @"/var/mobile/Documents/hb_inject.log";
+    NSString *probeLog = @"/var/mobile/hb_probe_*.log";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableArray *lines = [NSMutableArray array];
+    
+    // 读取注入日志
+    if ([fm fileExistsAtPath:injectLog]) {
+        NSString *content = [NSString stringWithContentsOfFile:injectLog encoding:NSUTF8StringEncoding error:nil];
+        if (content.length > 0) {
+            [lines addObjectsFromArray:[content componentsSeparatedByString:@"\n"]];
+        }
+    }
+    
+    // 读取probe日志
+    NSArray *probePaths = [fm contentsOfDirectoryAtPath:@"/var/mobile/" error:nil];
+    for (NSString *name in probePaths) {
+        if ([name hasPrefix:@"hb_probe_"] && [name hasSuffix:@".log"]) {
+            NSString *path = [@"/var/mobile/" stringByAppendingPathComponent:name];
+            NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+            if (content.length > 0) {
+                [lines addObjectsFromArray:[content componentsSeparatedByString:@"\n"]];
+            }
+        }
+    }
+    
+    if (lines.count == 0) {
+        [self showAlert:@"诊断结果" message:@"未找到tweak注入日志。\n可能原因：\n1. tweak未安装或未启用\n2. 微信/支付宝未启动过\n\n请在设备上检查：\n- /var/mobile/Documents/hb_inject.log\n- /var/mobile/hb_probe_*.log"];
+        return;
+    }
+    
+    // 过滤最近100行
+    NSInteger startIdx = MAX(0, (NSInteger)lines.count - 100);
+    NSString *summary = [lines subarrayWithRange:NSMakeRange(startIdx, lines.count - startIdx)].componentsJoinedByString:@"\n"];
+    
+    // 统计关键信息
+    NSInteger injCount = 0, alipayCount = 0;
+    for (NSString *line in lines) {
+        if ([line containsString:@"[INJ-V2]"]) injCount++;
+        if ([line containsString:@"isAlipay=1"]) alipayCount++;
+    }
+    
+    NSString *msg = [NSString stringWithFormat:@"tweak注入日志（最近%ld行）：\n\n注入次数: %ld\n支付宝注入: %ld\n\n详情：\n%@", (long)lines.count, (long)injCount, (long)alipayCount, summary];
+    [self showAlert:@"tweak注入诊断" message:msg];
 }
 
 #pragma mark - Generation

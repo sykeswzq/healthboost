@@ -88,11 +88,11 @@ static BOOL HBHookClass(Class cls, SEL sel, IMP replacement, IMP *origOut) {
 static void HBRawLog(const char *fmt, ...);
 static void HBProbeLog(NSString *fmt, ...);
 
-// 「今天」判断（本地时区）。
-// v1.0.201 修复：昨天设 1000、今天改成 500 后微信仍显示 1000 ——
-// 根因是 hb_steps.txt / CFPreferences 没有日期概念，昨天的残留值永远有效。
-// 现在步数文件第二行带 date:YYYY-MM-DD（旧格式退回用文件修改时间判断），
-// CFPreferences 增加 stepsDate 键；非今天的值一律视为过期，放行真实步数。
+// 「今天」判断（本地时区）—— 仅用于诊断日志。
+// v1.0.201 曾做过「非今天的值失效」，但实际根因是 App 保存设置时不写步数文件
+// （v1.0.202 已改为保存即写入），过期失效反而导致「第二天生成前微信显示真实步数」。
+// v1.0.202 语义：文件值 = 用户当前设定的目标步数，持续生效直到用户修改；
+// 99999 / >200000 哨兵脏值仍在 HBReadFakeSteps 里拦截。
 static NSString *HBFakeTodayString(void) {
     NSDateFormatter *f = [[NSDateFormatter alloc] init];
     f.dateFormat = @"yyyy-MM-dd";
@@ -112,7 +112,7 @@ static BOOL HBFileIsToday(NSString *path) {
 }
 
 // 解析步数文件：第一行是数字，第二行可选 date:YYYY-MM-DD。
-// 无日期行时退回用文件修改时间判断是否今天（兼容旧格式）。
+// outFresh 仅用于诊断日志，不影响取值。
 static void HBParseStepsFile(NSString *path, NSInteger *outVal, BOOL *outFresh) {
     *outVal = 0; *outFresh = NO;
     if (!path) return;
@@ -132,7 +132,7 @@ static void HBParseStepsFile(NSString *path, NSInteger *outVal, BOOL *outFresh) 
 }
 
 // 读取目标步数（0 = 不篡改，原样放行）。
-// v1.0.201：三路来源全部带「今天」校验，昨天的残留值不再生效。
+// v1.0.202：文件值 = 当前目标，不限「今天」；日期只进日志。
 static NSInteger HBReadFakeSteps(void) {
     @autoreleasepool {
         // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入；支付宝容器一般没有）
@@ -152,9 +152,7 @@ static NSInteger HBReadFakeSteps(void) {
         NSInteger sharedVal = 0;
         BOOL sharedFresh = NO;
         HBParseStepsFile(@"/var/mobile/Documents/hb_steps.txt", &sharedVal, &sharedFresh);
-        NSInteger fileValEffective = 0;
-        if (sharedFresh && sharedVal > 0) fileValEffective = sharedVal;
-        else if (fileFresh && fileVal > 0) fileValEffective = fileVal;
+        NSInteger fileValEffective = (sharedVal > 0) ? sharedVal : fileVal;
 
         NSInteger cfVal = 0;
         BOOL cfFresh = NO;
@@ -182,9 +180,9 @@ static NSInteger HBReadFakeSteps(void) {
             }
             CFRelease(dateVal);
         }
-        // 优先共享文件，其次进程容器文件，最后 CFPreferences；全部要求「今天」
-        NSInteger result = (fileValEffective > 0) ? fileValEffective : (cfFresh ? cfVal : 0);
-        HBProbeLog(@"READ_FAKE: sharedFile=%ld(fresh=%d) selfFile=%ld(fresh=%d) cfPref=%ld(fresh=%d) -> using=%ld",
+        // 优先共享文件，其次进程容器文件，最后 CFPreferences；日期仅诊断不参与判断
+        NSInteger result = (fileValEffective > 0) ? fileValEffective : cfVal;
+        HBProbeLog(@"READ_FAKE: sharedFile=%ld(today=%d) selfFile=%ld(today=%d) cfPref=%ld(today=%d) -> using=%ld",
                    (long)sharedVal, sharedFresh, (long)fileVal, fileFresh, (long)cfVal, cfFresh, (long)result);
         // 防御：99999 是支付宝的异常/兜底哨兵值（非用户真实意图）；>200000 视为离谱脏值。
         // 正常伪造步数（含 9万~20万）不受影响，仅拦截确切 99999 与明显异常值。
