@@ -569,8 +569,8 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
     if (s == 0) return 3;
     if (s == 1) return 1;
-    // v1.0.202: section 2 增加「注入诊断」行
-    return 3;
+    // 定时生成section：生成时间 + 设置时间
+    return 2;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -617,12 +617,6 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
             cell.accessoryView = sw;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else if (ip.row == 1) {
-            // v1.0.202: 注入诊断入口
-            cell.imageView.image = [UIImage systemImageNamed:@"magnifyingglass"];
-            cell.textLabel.text = @"tweak注入诊断";
-            cell.detailTextLabel.text = @"查看注入状态";
-            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-        } else {
             cell.imageView.image = [UIImage systemImageNamed:@"timer"];
             cell.textLabel.text = @"生成时间";
             cell.detailTextLabel.text = [NSString stringWithFormat:@"%02ld:%02ld", (long)self.schedHour, (long)self.schedMinute];
@@ -649,8 +643,6 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
         [self editIntegerWithTitle:@"楼层" message:@"设置爬楼层数" current:self.flights handler:^(long v){ self.flights = v; [self saveSettings]; [self.tableView reloadData]; }];
     } else if (ip.section == 1) {
         [self generateNow];
-    } else if (ip.section == 2 && ip.row == 0) {
-        [self showInjectionDiagnostic];
     } else if (ip.section == 2 && ip.row == 1) {
         [self pickTime];
     }
@@ -800,51 +792,6 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
-}
-
-// v1.0.202 新增诊断功能：读取tweak注入日志并显示给用户
-- (void)showInjectionDiagnostic {
-    NSString *injectLog = @"/var/mobile/Documents/hb_inject.log";
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSMutableArray *lines = [NSMutableArray array];
-    
-    // 读取注入日志
-    if ([fm fileExistsAtPath:injectLog]) {
-        NSString *content = [NSString stringWithContentsOfFile:injectLog encoding:NSUTF8StringEncoding error:nil];
-        if (content.length > 0) {
-            [lines addObjectsFromArray:[content componentsSeparatedByString:@"\n"]];
-        }
-    }
-    
-    // 读取probe日志
-    NSArray *probePaths = [fm contentsOfDirectoryAtPath:@"/var/mobile/" error:nil];
-    for (NSString *name in probePaths) {
-        if ([name hasPrefix:@"hb_probe_"] && [name hasSuffix:@".log"]) {
-            NSString *path = [@"/var/mobile/" stringByAppendingPathComponent:name];
-            NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-            if (content.length > 0) {
-                [lines addObjectsFromArray:[content componentsSeparatedByString:@"\n"]];
-            }
-        }
-    }
-    
-    if (lines.count == 0) {
-        [self showAlert:@"诊断结果" message:@"未找到tweak注入日志。\n可能原因：\n1. tweak未安装或未启用\n2. 微信未启动过\n\n请在设备上检查：\n- /var/mobile/Documents/hb_inject.log\n- /var/mobile/hb_probe_*.log"];
-        return;
-    }
-    
-    // 过滤最近100行
-    NSInteger startIdx = MAX(0, (NSInteger)lines.count - 100);
-    NSString *summary = [[lines subarrayWithRange:NSMakeRange(startIdx, lines.count - startIdx)] componentsJoinedByString:@"\n"];
-    
-    // 统计关键信息
-    NSInteger injCount = 0;
-    for (NSString *line in lines) {
-        if ([line containsString:@"[INJ-V2]"]) injCount++;
-    }
-    
-    NSString *msg = [NSString stringWithFormat:@"tweak注入日志（最近%ld行）：\n\n注入次数: %ld\n\n详情：\n%@", (long)lines.count, (long)injCount, summary];
-    [self showAlert:@"tweak注入诊断" message:msg];
 }
 
 #pragma mark - Generation
