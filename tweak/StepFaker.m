@@ -88,44 +88,76 @@ static BOOL HBHookClass(Class cls, SEL sel, IMP replacement, IMP *origOut) {
 static void HBRawLog(const char *fmt, ...);
 static void HBProbeLog(NSString *fmt, ...);
 
+// 「今天」判断（本地时区）。
+// v1.0.201 修复：昨天设 1000、今天改成 500 后微信仍显示 1000 ——
+// 根因是 hb_steps.txt / CFPreferences 没有日期概念，昨天的残留值永远有效。
+// 现在步数文件第二行带 date:YYYY-MM-DD（旧格式退回用文件修改时间判断），
+// CFPreferences 增加 stepsDate 键；非今天的值一律视为过期，放行真实步数。
+static NSString *HBFakeTodayString(void) {
+    NSDateFormatter *f = [[NSDateFormatter alloc] init];
+    f.dateFormat = @"yyyy-MM-dd";
+    return [f stringFromDate:[NSDate date]];
+}
+
+static BOOL HBFileIsToday(NSString *path) {
+    if (!path) return NO;
+    NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    if (!attr) return NO;
+    NSDate *mt = attr[NSFileModificationDate];
+    if (!mt) return NO;
+    NSCalendar *cal = [NSCalendar currentCalendar];
+    NSDateComponents *a = [cal components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay fromDate:mt];
+    NSDateComponents *b = [cal components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay fromDate:[NSDate date]];
+    return (a.year == b.year && a.month == b.month && a.day == b.day);
+}
+
+// 解析步数文件：第一行是数字，第二行可选 date:YYYY-MM-DD。
+// 无日期行时退回用文件修改时间判断是否今天（兼容旧格式）。
+static void HBParseStepsFile(NSString *path, NSInteger *outVal, BOOL *outFresh) {
+    *outVal = 0; *outFresh = NO;
+    if (!path) return;
+    NSString *c = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (c.length == 0) return;
+    NSArray *lines = [c componentsSeparatedByString:@"\n"];
+    *outVal = [lines.firstObject integerValue];
+    BOOL fresh = NO;
+    if (lines.count > 1) {
+        NSString *second = [lines[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([second hasPrefix:@"date:"]) {
+            fresh = [[second substringFromIndex:5] isEqualToString:HBFakeTodayString()];
+        }
+    }
+    if (!fresh) fresh = HBFileIsToday(path);
+    *outFresh = fresh;
+}
+
 // 读取目标步数（0 = 不篡改，原样放行）。
-// v1.0.159：增加「值来源」诊断日志，定位 99999 到底来自文件还是 CFPreferences。
+// v1.0.201：三路来源全部带「今天」校验，昨天的残留值不再生效。
 static NSInteger HBReadFakeSteps(void) {
     @autoreleasepool {
         // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入；支付宝容器一般没有）
         NSInteger fileVal = 0;
+        BOOL fileFresh = NO;
         NSString *filePath = nil;
         NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
             NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *doc = paths.firstObject;
         if (doc.length > 0) {
-            NSString *p = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
-            filePath = p;
-            NSString *c = [NSString stringWithContentsOfFile:p
-                                                  encoding:NSUTF8StringEncoding
-                                                     error:nil];
-            if (c.length > 0) {
-                NSString *line = [[c componentsSeparatedByString:@"\n"] firstObject];
-                fileVal = [line integerValue];
-            }
+            filePath = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+            HBParseStepsFile(filePath, &fileVal, &fileFresh);
         }
         // ② 共享通道（v1.0.164 新增）：App 把假步数统一写到用户 home 的
         //    /var/mobile/Documents/hb_steps.txt，任何进程（含支付宝）都能直接读到，
         //    不依赖各 App 自身沙盒容器。这是支付宝拿到假值的唯一可靠来源。
         NSInteger sharedVal = 0;
-        {
-            NSString *sp = @"/var/mobile/Documents/hb_steps.txt";
-            NSString *sc = [NSString stringWithContentsOfFile:sp
-                                                    encoding:NSUTF8StringEncoding
-                                                       error:nil];
-            if (sc.length > 0) {
-                NSString *line = [[sc componentsSeparatedByString:@"\n"] firstObject];
-                sharedVal = [line integerValue];
-            }
-        }
-        NSInteger fileValEffective = (sharedVal > 0) ? sharedVal : fileVal;
+        BOOL sharedFresh = NO;
+        HBParseStepsFile(@"/var/mobile/Documents/hb_steps.txt", &sharedVal, &sharedFresh);
+        NSInteger fileValEffective = 0;
+        if (sharedFresh && sharedVal > 0) fileValEffective = sharedVal;
+        else if (fileFresh && fileVal > 0) fileValEffective = fileVal;
 
         NSInteger cfVal = 0;
+        BOOL cfFresh = NO;
         CFPropertyListRef val = CFPreferencesCopyValue(
             CFSTR("steps"),
             CFSTR("com.apple.mobile.healthboost"),
@@ -139,10 +171,21 @@ static NSInteger HBReadFakeSteps(void) {
             }
             CFRelease(val);
         }
-        // 优先共享文件，其次进程容器文件，再次 CFPreferences；三路都打印，便于定位 99999 来源
-        NSInteger result = (fileValEffective > 0) ? fileValEffective : cfVal;
-        HBProbeLog(@"READ_FAKE: sharedFile=%ld selfFile=%ld cfPref=%ld -> using=%ld",
-                   (long)sharedVal, (long)fileVal, (long)cfVal, (long)result);
+        CFPropertyListRef dateVal = CFPreferencesCopyValue(
+            CFSTR("stepsDate"),
+            CFSTR("com.apple.mobile.healthboost"),
+            kCFPreferencesAnyUser,
+            kCFPreferencesAnyHost);
+        if (dateVal) {
+            if (CFGetTypeID(dateVal) == CFStringGetTypeID()) {
+                cfFresh = [(__bridge NSString *)dateVal isEqualToString:HBFakeTodayString()];
+            }
+            CFRelease(dateVal);
+        }
+        // 优先共享文件，其次进程容器文件，最后 CFPreferences；全部要求「今天」
+        NSInteger result = (fileValEffective > 0) ? fileValEffective : (cfFresh ? cfVal : 0);
+        HBProbeLog(@"READ_FAKE: sharedFile=%ld(fresh=%d) selfFile=%ld(fresh=%d) cfPref=%ld(fresh=%d) -> using=%ld",
+                   (long)sharedVal, sharedFresh, (long)fileVal, fileFresh, (long)cfVal, cfFresh, (long)result);
         // 防御：99999 是支付宝的异常/兜底哨兵值（非用户真实意图）；>200000 视为离谱脏值。
         // 正常伪造步数（含 9万~20万）不受影响，仅拦截确切 99999 与明显异常值。
         if (result == 99999 || result > 200000 || result <= 0) {

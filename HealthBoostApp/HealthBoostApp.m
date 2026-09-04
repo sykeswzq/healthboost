@@ -97,6 +97,14 @@ static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NS
 //      微信进程里的 tweak 直接读这个文件。这是主通道。
 //   2) CFPreferences com.apple.mobile.healthboost —— 兜底。
 // 这一步与写 HealthKit 是两条独立链路：HealthKit 管「健康」App，这里管「微信运动」。
+// 步数文件统一格式：第一行数字，第二行 date:YYYY-MM-DD（v1.0.201 起必带）。
+// tweak 端据此做「今天」校验，昨天的残留值不再被微信/支付宝读走。
+static NSString *HBFakeDateLine(void) {
+    NSDateFormatter *f = [[NSDateFormatter alloc] init];
+    f.dateFormat = @"yyyy-MM-dd";
+    return [NSString stringWithFormat:@"date:%@", [f stringFromDate:[NSDate date]]];
+}
+
 static void HBWriteStepsFile(long steps) {
     NSString *dir = @"/var/mobile/Media/HealthBoost";
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -104,7 +112,7 @@ static void HBWriteStepsFile(long steps) {
         [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     }
     NSString *path = [dir stringByAppendingPathComponent:@"hb_steps.txt"];
-    NSString *content = [NSString stringWithFormat:@"%ld\n", steps];
+    NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
     BOOL ok = [content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     HBLog(@"[HealthBoost] 已写入步数文件 %ld (file=%d) @ %@", steps, ok, path);
 }
@@ -150,7 +158,7 @@ static NSInteger HBWriteStepsToVarMobileDocuments(long steps) {
         [fm createDirectoryAtPath:doc withIntermediateDirectories:YES attributes:nil error:nil];
     }
     NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
-    NSString *content = [NSString stringWithFormat:@"%ld\n", steps];
+    NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
     BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
     if (ok) [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
     HBLog(@"[HealthBoost] 写入 /var/mobile/Documents/hb_steps.txt (ok=%d) —— 供无容器守护进程读取", ok);
@@ -166,7 +174,7 @@ static NSInteger HBWriteStepsToWeChatContainers(long steps) {
     }
     NSFileManager *fm = [NSFileManager defaultManager];
     NSInteger okCount = 0;
-    NSString *content = [NSString stringWithFormat:@"%ld\n", steps];
+    NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
     for (NSString *c in containers) {
         NSString *doc = [c stringByAppendingPathComponent:@"Documents"];
         if (![fm fileExistsAtPath:doc]) {
@@ -195,9 +203,15 @@ static void HBWriteStepsPreference(long steps) {
     NSInteger nVarMobile = HBWriteStepsToVarMobileDocuments(steps);
     // 通道2：共享 Media 目录（仅对无沙盒进程有效）
     HBWriteStepsFile(steps);
-    // 通道3：CFPreferences 系统域（UCStep 同款跨沙盒手法）
+    // 通道3：CFPreferences 系统域（UCStep 同款跨沙盒手法）+ stepsDate 供 tweak 校验「今天」
+    NSString *todayStr = HBFakeDateLine();   // 形如 date:2026-09-04
     CFPreferencesSetValue(CFSTR("steps"),
                           (__bridge CFNumberRef)@(steps),
+                          CFSTR("com.apple.mobile.healthboost"),
+                          kCFPreferencesAnyUser,
+                          kCFPreferencesAnyHost);
+    CFPreferencesSetValue(CFSTR("stepsDate"),
+                          (__bridge CFStringRef)[todayStr substringFromIndex:5],
                           CFSTR("com.apple.mobile.healthboost"),
                           kCFPreferencesAnyUser,
                           kCFPreferencesAnyHost);
@@ -225,6 +239,7 @@ static void HBClearStepsFiles(void) {
     NSString *media = @"/var/mobile/Media/HealthBoost/hb_steps.txt";
     if ([fm fileExistsAtPath:media]) { [fm removeItemAtPath:media error:nil]; HBLog(@"[HealthBoost] 已清除 /var/mobile/Media/HealthBoost/hb_steps.txt"); }
     CFPreferencesSetValue(CFSTR("steps"), NULL, CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+    CFPreferencesSetValue(CFSTR("stepsDate"), NULL, CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
     CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
     HBLog(@"[HealthBoost] 已清空 CFPreferences 步数，微信/支付宝恢复真实步数");
 }
@@ -444,52 +459,62 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
     [self setupNotifications];
     if (self.scheduleOn) [self scheduleDailyNotification];
 
+    // v1.0.201 补生成：通知横幅若没被点到（App 未运行/用户忽略），当天就不会生成，
+    // 微信会一直显示昨天的残留值。现在 App 每次启动/回到前台都检查一次：
+    // 「已开定时 + 今天没生成过 + 已过设定时间」就自动补生成，不依赖点横幅。
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(checkAndCatchUpGeneration)
+                                                 name:UIApplicationWillEnterForegroundNotification
+                                               object:nil];
+    [self performSelector:@selector(checkAndCatchUpGeneration) withObject:nil afterDelay:1.0];
+
     HBLog(@"[UCS] App 启动");
 }
 
-// 持久化「已请求过通知授权」标记：
-//  - NSUserDefaults 能扛住「关闭 App 重开」（进程内存会被重置，所以不能用 static）
-//  - 额外写一份到 /var/mobile/Documents/ 做跨重装/重签备份（App 容器在重装时会被清空）
-// 两者任一存在即视为「已询问过」，后续不再弹窗，彻底解决「允许后重开/重装仍反复弹」的问题。
-static NSString *HBNotifFlagPath(void) {
-    return @"/var/mobile/Documents/.hb_notif_requested";
-}
-- (BOOL)hbHasRequestedNotification {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"hb_notif_requested"]) return YES;
-    return [[NSFileManager defaultManager] fileExistsAtPath:HBNotifFlagPath()];
-}
-- (void)hbMarkNotificationRequested {
-    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    [ud setBool:YES forKey:@"hb_notif_requested"];
-    [ud synchronize];
-    NSString *p = HBNotifFlagPath();
-    if (![[NSFileManager defaultManager] fileExistsAtPath:p]) {
-        [@"1" writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    }
+// 最后生成日期记录（App 沙盒 Documents/hb_lastgen.txt，内容为 YYYY-MM-DD）
+static NSString *HBLastGenPath(void) {
+    NSString *doc = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    return [doc stringByAppendingPathComponent:@"hb_lastgen.txt"];
 }
 
+static NSString *HBTodayString(void) {
+    NSDateFormatter *f = [[NSDateFormatter alloc] init];
+    f.dateFormat = @"yyyy-MM-dd";
+    return [f stringFromDate:[NSDate date]];
+}
+
+- (void)checkAndCatchUpGeneration {
+    if (!self.scheduleOn || !self.enabled || self.busy) return;
+    NSString *last = [NSString stringWithContentsOfFile:HBLastGenPath() encoding:NSUTF8StringEncoding error:nil];
+    last = [last stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([last isEqualToString:HBTodayString()]) return;   // 今天已生成过
+    NSCalendar *cal = [NSCalendar currentCalendar];
+    NSDateComponents *now = [cal components:NSCalendarUnitHour|NSCalendarUnitMinute fromDate:[NSDate date]];
+    if (now.hour < self.schedHour || (now.hour == self.schedHour && now.minute < self.schedMinute)) return;   // 还没到设定时间
+    [self loadSettings];   // 强制从磁盘刷新，避免用内存里的旧步数值
+    HBLog(@"[UCS] 错过定时通知，自动补生成今日数据 (设定 %02ld:%02ld, 当前 %02ld:%02ld)",
+          (long)self.schedHour, (long)self.schedMinute, (long)now.hour, (long)now.minute);
+    [self updateStatus:@"已自动补生成今日数据…"];
+    [self generateNow];
+}
+
+// v1.0.201 修复「设置-通知里找不到本 App」：
+// 旧逻辑在 /var/mobile/Documents/.hb_notif_requested 放标记文件，跨重装残留，
+// 导致新装后授权状态明明是 NotDetermined 却跳过请求 —— App 从未真正请求通知
+// 权限，自然不会出现在系统设置的通知列表里。
+// 现在只要状态是 NotDetermined 就请求：用户若已允许/拒绝，状态不会是
+// NotDetermined，系统本来就不会重复弹窗，标记文件逻辑是多余且有害的。
 - (void)setupNotifications {
     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
     c.delegate = self;
-    // 仅当授权状态为「未决定」且「历史上从未请求过」时才弹请求框；
-    // 已授权/已拒绝/临时授权，或曾经询问过，都不再重复弹。
     [c getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings){
         UNAuthorizationStatus st = settings.authorizationStatus;
         HBLog(@"[UCS] 通知权限状态=%ld (0=NotDetermined 1=Denied 2=Authorized 3=Provisional 4=Ephemeral)",
               (long)st);
-        if (st != UNAuthorizationStatusNotDetermined) {
-            HBLog(@"[UCS] 通知已决定(非NotDetermined)，跳过弹窗");
-            return;
-        }
-        if ([self hbHasRequestedNotification]) {
-            HBLog(@"[UCS] 历史已请求过通知授权(标记存在)，跳过重复弹窗");
-            return;
-        }
+        if (st != UNAuthorizationStatusNotDetermined) return;
         [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound|UNAuthorizationOptionBadge
                         completionHandler:^(BOOL g, NSError *e){
             HBLog(@"[UCS] 通知授权结果 granted=%d err=%@", g, e ? e.localizedDescription : @"nil");
-            // 无论允许或拒绝，都写入标记：本次已询问过，后续不再重复弹
-            [self hbMarkNotificationRequested];
         }];
     }];
 }
@@ -677,11 +702,17 @@ static NSString *HBNotifFlagPath(void) {
 #pragma mark - UNUserNotificationCenterDelegate
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center willPresentNotification:(UNNotification *)notification withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
-    if ([notification.request.identifier isEqualToString:@"UCSDailyGen"]) [self generateNow];
+    if ([notification.request.identifier isEqualToString:@"UCSDailyGen"]) {
+        [self loadSettings];   // v1.0.201：App 挂起恢复时 viewDidLoad 不会重跑，先刷新磁盘设置
+        [self generateNow];
+    }
     completionHandler(UNNotificationPresentationOptionNone);
 }
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void(^)(void))completionHandler {
-    if ([response.notification.request.identifier isEqualToString:@"UCSDailyGen"]) [self generateNow];
+    if ([response.notification.request.identifier isEqualToString:@"UCSDailyGen"]) {
+        [self loadSettings];
+        [self generateNow];
+    }
     completionHandler();
 }
 
@@ -986,6 +1017,8 @@ static NSString *HBNotifFlagPath(void) {
 
 - (void)finishSuccess:(HKSourceRevision *)deviceRev {
     self.busy = NO;
+    // 记录「今天已生成」，供 checkAndCatchUpGeneration 判断，避免重复生成
+    [HBTodayString() writeToFile:HBLastGenPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
     [self updateStatus:@"运动数据已生成"];
     [self showAlert:@"运动数据已生成" message:@""];
 }
