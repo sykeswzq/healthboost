@@ -830,8 +830,5 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     HBRawLog("P7_WECHAT after probe");
     StepFakerTryHookCoreMotion();
     HBRawLog("P8_WECHAT after CoreMotion");
-    // 注意：这里原本还会调一次 StepFakerTryHookAlipay()。
-        // 但 1.0.166 加了「动态扫描 + 按签名 hook」之后，同样的调用会去扫描并 hook
-            StepFakerTryHookAlipay();
     HBRawLog("P9_DONE_WECHAT");
 }
