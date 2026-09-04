@@ -496,19 +496,39 @@ static NSString *HBTodayString(void) {
     [self generateNow];
 }
 
-// v1.0.203 修复「每次打开都弹授权框」：
-// 问题根因：每次都调用 requestAuthorization，系统会重复弹窗。
-// 修复方案：用 NSUserDefaults 持久化记录「是否已请求过」，仅首次启动时弹窗。
+// v1.0.205 修复「每次打开都弹授权框」：
+// 问题根因：每次启动都调用 requestAuthorization，系统重复弹窗。
+// 修复方案：用文件持久化标记（跨重启保留），仅首次请求授权。
 static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
+static NSString * const HBNotifFlagFile = @"/var/mobile/Documents/.hb_notif_requested";
+
+// 检查是否已请求过通知权限（文件持久化，比NSUserDefaults更可靠）
+static BOOL HBHasRequestedNotification(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    // 先查文件（最可靠）
+    if ([fm fileExistsAtPath:HBNotifFlagFile]) return YES;
+    // 再查UserDefaults（辅助）
+    BOOL defaultsVal = [[NSUserDefaults standardUserDefaults] boolForKey:HBNotifRequestedKey];
+    return defaultsVal;
+}
+
+// 标记已请求通知权限（写文件 + UserDefaults双重保障）
+static void HBMarkNotificationRequested(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    // 写标记文件到用户Documents（roothide下可写）
+    [fm createFileAtPath:HBNotifFlagFile contents:nil attributes:nil];
+    // 同步UserDefaults
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:HBNotifRequestedKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
 static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (void)setupNotifications {
     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
     c.delegate = self;
     
-    // 检查是否已经请求过授权（持久化标记，跨重启保留）
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    BOOL alreadyRequested = [defaults boolForKey:HBNotifRequestedKey];
-    if (alreadyRequested) {
+    // 检查是否已经请求过授权（文件持久化，跨重启保留）
+    if (HBHasRequestedNotification()) {
         HBLog(@"[UCS] 通知权限已请求过，跳过弹窗");
         return;
     }
@@ -517,17 +537,16 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
     [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound|UNAuthorizationOptionBadge
                     completionHandler:^(BOOL g, NSError *e){
         // 标记已请求（无论成功失败）
-        [defaults setBool:YES forKey:HBNotifRequestedKey];
-        [defaults synchronize];
+        HBMarkNotificationRequested();
         
         if (g) {
             HBLog(@"[UCS] 通知授权成功");
-            [defaults setInteger:0 forKey:HBNotifFailCountKey];
-            [defaults synchronize];
+            [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:HBNotifFailCountKey];
+            [[NSUserDefaults standardUserDefaults] synchronize];
         } else {
-            NSInteger failCount = [defaults integerForKey:HBNotifFailCountKey] + 1;
-            [defaults setInteger:failCount forKey:HBNotifFailCountKey];
-            [defaults synchronize];
+            NSInteger failCount = [[NSUserDefaults standardUserDefaults] integerForKey:HBNotifFailCountKey] + 1;
+            [[NSUserDefaults standardUserDefaults] setInteger:failCount forKey:HBNotifFailCountKey];
+            [[NSUserDefaults standardUserDefaults] synchronize];
             HBLog(@"[UCS] 通知授权失败 attempt=%ld err=%@", (long)failCount, e ? e.localizedDescription : @"nil");
             // 失败超过3次，静默跳过
             if (failCount >= 3) {
