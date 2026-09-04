@@ -20,11 +20,7 @@ set -euo pipefail
 # ============================================================================
 
 # 版本号：v2.0 最终版
-if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
-  VER="2.0.${GITHUB_RUN_NUMBER}"
-else
-  VER="2.0.$(date +%s)"
-fi
+VER="2.0"
 echo "版本号: $VER"
 PKG="com.sykes.ucs"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
