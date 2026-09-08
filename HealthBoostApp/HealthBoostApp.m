@@ -894,6 +894,79 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
         NSArray *samples = results ?: @[];
         HBLog(@"[UCS] today %lu samples", (unsigned long)samples.count);
 
+        // v2.0.1 修复：检查是否已有真实设备步数（用户自己走路的）
+        // 如果有，说明用户已经走路了，不应该覆盖真实数据
+        BOOL hasRealDeviceSteps = NO;
+        for (HKSample *s in samples) {
+            HKSourceRevision *rev = s.sourceRevision;
+            if (!rev) continue;
+            HKSource *src = rev.source;
+            NSString *bid = src ? src.bundleIdentifier : nil;
+            // 设备源（bid=nil）或 Health App 源的样本
+            if (bid == nil || [bid hasPrefix:@"com.apple.health."]) {
+                if ([s isKindOfClass:[HKQuantitySample class]]) {
+                    HKQuantitySample *qs = (HKQuantitySample *)s;
+                    double stepVal = [qs.quantity doubleValueForUnit:[HKUnit countUnit]];
+                    if (stepVal > 0) {
+                        hasRealDeviceSteps = YES;
+                        HBLog(@"[UCS] 发现真实设备步数 %.0f，跳过覆盖", stepVal);
+                        break;
+                    }
+                }
+            }
+        }
+        if (hasRealDeviceSteps) {
+            // 已有真实数据，只需写入距离和楼层（不影响步数）
+            HBLog(@"[UCS] 已有真实步数，仅补充距离和楼层数据");
+            NSDate *sampleNow = [NSDate date];
+            HKQuantityType *distType2 = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning];
+            HKQuantityType *flightType2 = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
+            // 先查询真实步数总和
+            __block long realSteps = steps; // 默认用设置值
+            HKStatisticsQuery *sumQ = [[HKStatisticsQuery alloc] initWithQuantityType:stepType
+                                                          quantitySamplePredicate:todayPred
+                                                                          options:HKStatisticsOptionCumulativeSum
+                                                                completionHandler:^(HKStatisticsQuery *query2, HKStatistics *result, NSError *error2) {
+                if (!error2 && result) {
+                    HKQuantity *sum = [result sumQuantity];
+                    if (sum) realSteps = (long)[sum doubleValueForUnit:[HKUnit countUnit]];
+                }
+                if (!error2 && result) {
+                    HKQuantity *sum = [result sumQuantity];
+                    if (sum) realSteps = (long)[sum doubleValueForUnit:[HKUnit countUnit]];
+                }
+                double realDistance = realSteps * self.ratio;
+                HBLog(@"[UCS] 真实步数=%ld，距离=%.1f", realSteps, realDistance);
+                // 写入距离
+                HKQuantity *distQ = [HKQuantity quantityWithUnit:[HKUnit meterUnit] doubleValue:realDistance];
+                HKQuantitySample *distSample = [HKQuantitySample quantitySampleWithType:distType2
+                                                                                quantity:distQ
+                                                                             startDate:sampleNow
+                                                                               endDate:sampleNow
+                                                                                 device:[HKDevice localDevice]
+                                                                               metadata:nil];
+                [self saveSamplePrivately:distSample completion:^(BOOL ok, NSError *e) {
+                    HBLog(@"[UCS] 距离写入: ok=%d", ok);
+                    // 写入楼层
+                    HKQuantity *flightQ = [HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:flights];
+                    HKQuantitySample *flightSample = [HKQuantitySample quantitySampleWithType:flightType2
+                                                                                    quantity:flightQ
+                                                                                 startDate:sampleNow
+                                                                                   endDate:sampleNow
+                                                                                     device:[HKDevice localDevice]
+                                                                                   metadata:nil];
+                    [self saveSamplePrivately:flightSample completion:^(BOOL ok2, NSError *e2) {
+                        HBLog(@"[UCS] 楼层写入: ok=%d", ok2);
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [self finishSuccess:deviceRev];
+                        });
+                    }];
+                }];
+            }];
+            [self.healthStore executeQuery:ssumQ];
+            return;
+        }
+
         HKSource *defaultSource = [HKSource defaultSource];
         NSString *myBid = defaultSource.bundleIdentifier;
         HBLog(@"[UCS] defaultSource bid = %@", myBid ?: @"(nil)");
