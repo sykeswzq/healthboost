@@ -931,10 +931,6 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
                     HKQuantity *sum = [result sumQuantity];
                     if (sum) realSteps = (long)[sum doubleValueForUnit:[HKUnit countUnit]];
                 }
-                if (!error2 && result) {
-                    HKQuantity *sum = [result sumQuantity];
-                    if (sum) realSteps = (long)[sum doubleValueForUnit:[HKUnit countUnit]];
-                }
                 double realDistance = realSteps * self.ratio;
                 HBLog(@"[UCS] 真实步数=%ld，距离=%.1f", realSteps, realDistance);
                 // 写入距离
