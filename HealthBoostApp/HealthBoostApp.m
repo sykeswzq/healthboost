@@ -958,7 +958,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
                     }];
                 }];
             }];
-            [self.healthStore executeQuery:ssumQ];
+            [self.healthStore executeQuery:sumQ];
             return;
         }
 
