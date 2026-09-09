@@ -321,60 +321,30 @@ static BOOL HBIsStepType(id type) {
 // 新逻辑：显示 = 真实步数(orig) + 虚拟步数(增量)
 static NSNumber *(*orig_numberOfSteps)(id, SEL) = NULL;
 static NSNumber *new_numberOfSteps(id self, SEL _cmd) {
+    // 方案A：虚拟步数已由 App 写入 Health（合成样本=虚拟增量），微信读 Health 即得 真实+虚拟。
+    // tweak 此处直通，不再叠加，否则 微信 = 真实+虚拟+虚拟 双重加。
+    NSNumber *real = orig_numberOfSteps ? orig_numberOfSteps(self, _cmd) : nil;
     NSInteger virtual = HBReadVirtualSteps();
-    NSInteger real = 0;
-    if (orig_numberOfSteps) real = [orig_numberOfSteps(self, _cmd) integerValue];
-    NSInteger total = (virtual > 0) ? (real + virtual) : real;
-    HBProbeLog(@"NUM_STEPS: real=%ld virtual=%ld total=%ld", (long)real, (long)virtual, (long)total);
-    return @(total);
+    HBProbeLog(@"NUM_STEPS passthrough: real=%@ virtual=%ld（App已写入Health）", real, (long)virtual);
+    return real;
 }
 
 // 路径二：HKStatistics 聚合查询（备用通道）
 // 新逻辑：显示 = 真实聚合值(orig) + 虚拟步数(增量)
 static id (*orig_sumQ)(id, SEL) = NULL;
 static id new_sumQ(id self, SEL _cmd) {
-    if (HBIsStepType([self quantityType])) {
-        NSInteger virtual = HBReadVirtualSteps();
-        id origQty = orig_sumQ ? orig_sumQ(self, _cmd) : nil;
-        double real = 0;
-        if ([origQty respondsToSelector:@selector(doubleValueForUnit:)]) {
-            real = [origQty doubleValueForUnit:[HKUnit countUnit]];
-        }
-        if (virtual > 0) {
-            static BOOL sumLogged = NO;
-            if (!sumLogged) {
-                sumLogged = YES;
-                HBProbeLog(@"HKSTAT_SUM: real=%.0f virtual=%ld total=%.0f", real, (long)virtual, real + (double)virtual);
-            }
-            HKUnit *unit = [HKUnit countUnit];
-            return [HKQuantity quantityWithUnit:unit doubleValue:real + (double)virtual];
-        }
-        return origQty;
-    }
-    return orig_sumQ ? orig_sumQ(self, _cmd) : nil;
+    // 方案A 直通：HKStatisticsQuery 聚合已含 App 写入的合成步数(虚拟增量)，直接返回原值。
+    id result = orig_sumQ ? orig_sumQ(self, _cmd) : nil;
+    HBProbeLog(@"HKSTAT_SUM passthrough: 返回 Health 原值(含虚拟增量)");
+    return result;
 }
 
 static id (*orig_avgQ)(id, SEL) = NULL;
 static id new_avgQ(id self, SEL _cmd) {
-    if (HBIsStepType([self quantityType])) {
-        NSInteger virtual = HBReadVirtualSteps();
-        id origQty = orig_avgQ ? orig_avgQ(self, _cmd) : nil;
-        double real = 0;
-        if ([origQty respondsToSelector:@selector(doubleValueForUnit:)]) {
-            real = [origQty doubleValueForUnit:[HKUnit countUnit]];
-        }
-        if (virtual > 0) {
-            static BOOL avgLogged = NO;
-            if (!avgLogged) {
-                avgLogged = YES;
-                HBProbeLog(@"HKSTAT_AVG: real=%.0f virtual=%ld total=%.0f", real, (long)virtual, real + (double)virtual);
-            }
-            HKUnit *unit = [HKUnit countUnit];
-            return [HKQuantity quantityWithUnit:unit doubleValue:real + (double)virtual];
-        }
-        return origQty;
-    }
-    return orig_avgQ ? orig_avgQ(self, _cmd) : nil;
+    // 方案A 直通：同上，直接返回 Health 原值。
+    id result = orig_avgQ ? orig_avgQ(self, _cmd) : nil;
+    HBProbeLog(@"HKSTAT_AVG passthrough: 返回 Health 原值(含虚拟增量)");
+    return result;
 }
 
 // 路径三：HKSampleQuery 逐样本查询（备用通道）
@@ -382,43 +352,7 @@ static id new_avgQ(id self, SEL _cmd) {
 static id (*orig_SQ_init)(id, SEL, id, id, unsigned long, id, id) = NULL;
 static id new_SQ_init(id self, SEL _cmd,
                       id type, id pred, unsigned long limit, id sorts, id handler) {
-    if (HBIsStepType(type)) {
-        NSInteger virtual = HBReadVirtualSteps();
-        if (virtual > 0 && handler) {
-            static BOOL sqLogged = NO;
-            if (!sqLogged) {
-                sqLogged = YES;
-                HBProbeLog(@"HKSAMPLE_QUERY: intercepting step query, virtual=%ld", (long)virtual);
-            }
-            id origHandler = handler;
-            id newHandler = ^(id q, id results, id error) {
-                @autoreleasepool {
-                    double realSum = 0;
-                    if ([results isKindOfClass:[NSArray class]]) {
-                        for (id s in results) {
-                            if ([s respondsToSelector:@selector(quantity)]) {
-                                HKQuantity *qty = [s quantity];
-                                if (qty) realSum += [qty doubleValueForUnit:[HKUnit countUnit]];
-                            }
-                        }
-                    }
-                    double total = realSum + (double)virtual;
-                    HBProbeLog(@"HKSAMPLE_QUERY: realSum=%.0f virtual=%ld total=%.0f", realSum, (long)virtual, total);
-                    HKUnit *unit = [HKUnit countUnit];
-                    HKQuantity *qty = [HKQuantity quantityWithUnit:unit doubleValue:total];
-                    HKQuantitySample *sample = [HKQuantitySample
-                        quantitySampleWithType:type
-                                      quantity:qty
-                                     startDate:[NSDate dateWithTimeIntervalSince1970:0]
-                                       endDate:[NSDate date]];
-                    NSArray *newResults = @[ sample ];
-                    void (^h)(id, id, id) = origHandler;
-                    h(q, newResults, error);
-                }
-            };
-            return orig_SQ_init(self, _cmd, type, pred, limit, sorts, newHandler);
-        }
-    }
+    // 方案A 直通：App 已把虚拟步数写进 Health，逐样本查询返回原结果即可，不再叠加。
     return orig_SQ_init(self, _cmd, type, pred, limit, sorts, handler);
 }
 
