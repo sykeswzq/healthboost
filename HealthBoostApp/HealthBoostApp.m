@@ -629,14 +629,13 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
     if (ip.section == 0 && ip.row == 0) {
-        [self editIntegerWithTitle:@"步数" message:@"设置每日目标步数" current:self.steps handler:^(long v){
+        [self editIntegerWithTitle:@"步数" message:@"设置虚拟步数（在真实步数上累加）" current:self.steps handler:^(long v){
             self.steps = v;
             [self saveSettings];
-            // v1.0.202 修复「昨天 1000 今天仍 1000」的根因：旧版改设置只存了偏好、
-            // 不写步数文件，文件里一直留着上次生成的旧值。现在保存即写入所有通道，
-            // 微信立刻读到新目标（微信下次查询就生效，无需等每日生成）。
+            // 新逻辑（真实步数+虚拟步数）：保存即写入所有通道，
+            // 微信侧 tweak 读到的是「虚拟步数增量」，显示 = 真实步数 + 该增量。
             HBWriteStepsPreference(v);
-            [self updateStatus:[NSString stringWithFormat:@"已生效：目标步数 %ld（微信下次刷新可见）", v]];
+            [self updateStatus:[NSString stringWithFormat:@"已生效：虚拟步数增量 %ld（微信显示 = 真实 + %ld）", v, v]];
             [self.tableView reloadData];
         }];
     } else if (ip.section == 0 && ip.row == 2) {
@@ -927,10 +926,6 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
                                                           quantitySamplePredicate:todayPred
                                                                           options:HKStatisticsOptionCumulativeSum
                                                                 completionHandler:^(HKStatisticsQuery *query2, HKStatistics *result, NSError *error2) {
-                if (!error2 && result) {
-                    HKQuantity *sum = [result sumQuantity];
-                    if (sum) realSteps = (long)[sum doubleValueForUnit:[HKUnit countUnit]];
-                }
                 if (!error2 && result) {
                     HKQuantity *sum = [result sumQuantity];
                     if (sum) realSteps = (long)[sum doubleValueForUnit:[HKUnit countUnit]];

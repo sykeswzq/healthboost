@@ -1,11 +1,14 @@
-// StepFaker —— 干净的注入式 tweak（微信步数伪造）
+// StepFaker —— 干净的注入式 tweak（微信步数：真实步数 + 虚拟步数）
 //
 // 设计：
 //  - 仅注入 com.tencent.xin（微信）。
-//  - 微信步数伪造逻辑（已验证可用）：
+//  - 微信步数逻辑（已验证可用）：
 //      * CMPedometerData.numberOfSteps（主通道）
 //      * HKStatistics sumQuantity/averageQuantity（备用通道）
 //      * HKSampleQuery 逐样本查询（备用通道）
+//  - 新逻辑（v1.0.23x）：【真实步数 + 虚拟步数】
+//      显示步数 = 设备计步器/HealthKit 返回的真实值 + 用户设定的虚拟步数增量；
+//      虚拟步数为 0（或脏值）时原样放行真实步数。
 //  - 日志写到两处：全局 /var/mobile/hb_probe_<bundle>.log（最好找）+ App 沙盒 Documents/hb_probe.log。
 //  - 所有文件写入都在主线程起来之后进行，constructor 内不做任何 IO，避免极早期 IO 引发不稳。
 //
@@ -84,8 +87,8 @@ static void HBProbeLog(NSString *fmt, ...);
 // 「今天」判断（本地时区）—— 仅用于诊断日志。
 // v1.0.201 曾做过「非今天的值失效」，但实际根因是 App 保存设置时不写步数文件
 // （v1.0.202 已改为保存即写入），过期失效反而导致「第二天生成前微信显示真实步数」。
-// v1.0.202 语义：文件值 = 用户当前设定的目标步数，持续生效直到用户修改；
-// 99999 / >200000 哨兵脏值仍在 HBReadFakeSteps 里拦截。
+// 文件值 = 用户当前设定的【虚拟步数增量】，持续生效直到用户修改；
+// 99999 / >200000 哨兵脏值仍在 HBReadVirtualSteps 里拦截。
 static NSString *HBFakeTodayString(void) {
     NSDateFormatter *f = [[NSDateFormatter alloc] init];
     f.dateFormat = @"yyyy-MM-dd";
@@ -126,7 +129,7 @@ static void HBParseStepsFile(NSString *path, NSInteger *outVal, BOOL *outFresh) 
 
 // 读取目标步数（0 = 不篡改，原样放行）。
 // v1.0.202：文件值 = 当前目标，不限「今天」；日期只进日志。
-static NSInteger HBReadFakeSteps(void) {
+static NSInteger HBReadVirtualSteps(void) {
     @autoreleasepool {
         // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入）
         NSInteger fileVal = 0;
@@ -175,10 +178,10 @@ static NSInteger HBReadFakeSteps(void) {
         }
         // 优先共享文件，其次进程容器文件，最后 CFPreferences；日期仅诊断不参与判断
         NSInteger result = (fileValEffective > 0) ? fileValEffective : cfVal;
-        HBProbeLog(@"READ_FAKE: sharedFile=%ld(today=%d) selfFile=%ld(today=%d) cfPref=%ld(today=%d) -> using=%ld",
+        HBProbeLog(@"READ_VIRTUAL: sharedFile=%ld(today=%d) selfFile=%ld(today=%d) cfPref=%ld(today=%d) -> virtualOffset=%ld",
                    (long)sharedVal, sharedFresh, (long)fileVal, fileFresh, (long)cfVal, cfFresh, (long)result);
         if (result == 99999 || result > 200000 || result <= 0) {
-            HBProbeLog(@"READ_FAKE_IGNORE: value=%ld 疑似残留脏值/哨兵，跳过伪造（显示真实步数）", (long)result);
+            HBProbeLog(@"READ_VIRTUAL_IGNORE: value=%ld 疑似残留脏值/哨兵/零增量，跳过累加（显示真实步数）", (long)result);
             return 0;
         }
         return result;
@@ -315,65 +318,94 @@ static BOOL HBIsStepType(id type) {
 }
 
 // 路径一：CMPedometerData.numberOfSteps（微信命中，1.0.131 验证可用）
+// 新逻辑：显示 = 真实步数(orig) + 虚拟步数(增量)
 static NSNumber *(*orig_numberOfSteps)(id, SEL) = NULL;
 static NSNumber *new_numberOfSteps(id self, SEL _cmd) {
-    NSInteger fake = HBReadFakeSteps();
-    if (fake > 0) return @(fake);
-    return orig_numberOfSteps(self, _cmd);
+    NSInteger virtual = HBReadVirtualSteps();
+    NSInteger real = 0;
+    if (orig_numberOfSteps) real = [orig_numberOfSteps(self, _cmd) integerValue];
+    NSInteger total = (virtual > 0) ? (real + virtual) : real;
+    HBProbeLog(@"NUM_STEPS: real=%ld virtual=%ld total=%ld", (long)real, (long)virtual, (long)total);
+    return @(total);
 }
 
 // 路径二：HKStatistics 聚合查询（备用通道）
+// 新逻辑：显示 = 真实聚合值(orig) + 虚拟步数(增量)
 static id (*orig_sumQ)(id, SEL) = NULL;
 static id new_sumQ(id self, SEL _cmd) {
     if (HBIsStepType([self quantityType])) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0) {
+        NSInteger virtual = HBReadVirtualSteps();
+        id origQty = orig_sumQ ? orig_sumQ(self, _cmd) : nil;
+        double real = 0;
+        if ([origQty respondsToSelector:@selector(doubleValueForUnit:)]) {
+            real = [origQty doubleValueForUnit:[HKUnit countUnit]];
+        }
+        if (virtual > 0) {
             static BOOL sumLogged = NO;
             if (!sumLogged) {
                 sumLogged = YES;
-                HBProbeLog(@"HKSTAT_SUM: returning fake=%ld", (long)fake);
+                HBProbeLog(@"HKSTAT_SUM: real=%.0f virtual=%ld total=%.0f", real, (long)virtual, real + (double)virtual);
             }
             HKUnit *unit = [HKUnit countUnit];
-            return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
+            return [HKQuantity quantityWithUnit:unit doubleValue:real + (double)virtual];
         }
+        return origQty;
     }
-    return orig_sumQ(self, _cmd);
+    return orig_sumQ ? orig_sumQ(self, _cmd) : nil;
 }
 
 static id (*orig_avgQ)(id, SEL) = NULL;
 static id new_avgQ(id self, SEL _cmd) {
     if (HBIsStepType([self quantityType])) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0) {
+        NSInteger virtual = HBReadVirtualSteps();
+        id origQty = orig_avgQ ? orig_avgQ(self, _cmd) : nil;
+        double real = 0;
+        if ([origQty respondsToSelector:@selector(doubleValueForUnit:)]) {
+            real = [origQty doubleValueForUnit:[HKUnit countUnit]];
+        }
+        if (virtual > 0) {
             static BOOL avgLogged = NO;
             if (!avgLogged) {
                 avgLogged = YES;
-                HBProbeLog(@"HKSTAT_AVG: returning fake=%ld", (long)fake);
+                HBProbeLog(@"HKSTAT_AVG: real=%.0f virtual=%ld total=%.0f", real, (long)virtual, real + (double)virtual);
             }
             HKUnit *unit = [HKUnit countUnit];
-            return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
+            return [HKQuantity quantityWithUnit:unit doubleValue:real + (double)virtual];
         }
+        return origQty;
     }
-    return orig_avgQ(self, _cmd);
+    return orig_avgQ ? orig_avgQ(self, _cmd) : nil;
 }
 
 // 路径三：HKSampleQuery 逐样本查询（备用通道）
+// 新逻辑：把返回的真实样本求和，再加上虚拟步数增量，用单个聚合样本替换返回。
 static id (*orig_SQ_init)(id, SEL, id, id, unsigned long, id, id) = NULL;
 static id new_SQ_init(id self, SEL _cmd,
                       id type, id pred, unsigned long limit, id sorts, id handler) {
     if (HBIsStepType(type)) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0 && handler) {
+        NSInteger virtual = HBReadVirtualSteps();
+        if (virtual > 0 && handler) {
             static BOOL sqLogged = NO;
             if (!sqLogged) {
                 sqLogged = YES;
-                HBProbeLog(@"HKSAMPLE_QUERY: intercepting step query, returning fake=%ld", (long)fake);
+                HBProbeLog(@"HKSAMPLE_QUERY: intercepting step query, virtual=%ld", (long)virtual);
             }
             id origHandler = handler;
             id newHandler = ^(id q, id results, id error) {
                 @autoreleasepool {
+                    double realSum = 0;
+                    if ([results isKindOfClass:[NSArray class]]) {
+                        for (id s in results) {
+                            if ([s respondsToSelector:@selector(quantity)]) {
+                                HKQuantity *qty = [s quantity];
+                                if (qty) realSum += [qty doubleValueForUnit:[HKUnit countUnit]];
+                            }
+                        }
+                    }
+                    double total = realSum + (double)virtual;
+                    HBProbeLog(@"HKSAMPLE_QUERY: realSum=%.0f virtual=%ld total=%.0f", realSum, (long)virtual, total);
                     HKUnit *unit = [HKUnit countUnit];
-                    HKQuantity *qty = [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
+                    HKQuantity *qty = [HKQuantity quantityWithUnit:unit doubleValue:total];
                     HKQuantitySample *sample = [HKQuantitySample
                         quantitySampleWithType:type
                                       quantity:qty
