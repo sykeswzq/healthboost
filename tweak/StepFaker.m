@@ -1,11 +1,14 @@
-// StepFaker —— 干净的注入式 tweak（微信步数伪造）
+// StepFaker —— 干净的注入式 tweak（微信步数：真实步数 + 虚拟步数）
 //
 // 设计：
 //  - 仅注入 com.tencent.xin（微信）。
-//  - 微信步数伪造逻辑（已验证可用）：
+//  - 微信步数逻辑（已验证可用）：
 //      * CMPedometerData.numberOfSteps（主通道）
 //      * HKStatistics sumQuantity/averageQuantity（备用通道）
 //      * HKSampleQuery 逐样本查询（备用通道）
+//  - 新逻辑（v1.0.23x）：【真实步数 + 虚拟步数】
+//      显示步数 = 设备计步器/HealthKit 返回的真实值 + 用户设定的虚拟步数增量；
+//      虚拟步数为 0（或脏值）时原样放行真实步数。
 //  - 日志写到两处：全局 /var/mobile/hb_probe_<bundle>.log（最好找）+ App 沙盒 Documents/hb_probe.log。
 //  - 所有文件写入都在主线程起来之后进行，constructor 内不做任何 IO，避免极早期 IO 引发不稳。
 //
@@ -84,8 +87,8 @@ static void HBProbeLog(NSString *fmt, ...);
 // 「今天」判断（本地时区）—— 仅用于诊断日志。
 // v1.0.201 曾做过「非今天的值失效」，但实际根因是 App 保存设置时不写步数文件
 // （v1.0.202 已改为保存即写入），过期失效反而导致「第二天生成前微信显示真实步数」。
-// v1.0.202 语义：文件值 = 用户当前设定的目标步数，持续生效直到用户修改；
-// 99999 / >200000 哨兵脏值仍在 HBReadFakeSteps 里拦截。
+// 文件值 = 用户当前设定的【虚拟步数增量】，持续生效直到用户修改；
+// 99999 / >200000 哨兵脏值仍在 HBReadVirtualSteps 里拦截。
 static NSString *HBFakeTodayString(void) {
     NSDateFormatter *f = [[NSDateFormatter alloc] init];
     f.dateFormat = @"yyyy-MM-dd";
@@ -126,7 +129,7 @@ static void HBParseStepsFile(NSString *path, NSInteger *outVal, BOOL *outFresh) 
 
 // 读取目标步数（0 = 不篡改，原样放行）。
 // v1.0.202：文件值 = 当前目标，不限「今天」；日期只进日志。
-static NSInteger HBReadFakeSteps(void) {
+static NSInteger HBReadVirtualSteps(void) {
     @autoreleasepool {
         // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入）
         NSInteger fileVal = 0;
@@ -175,10 +178,10 @@ static NSInteger HBReadFakeSteps(void) {
         }
         // 优先共享文件，其次进程容器文件，最后 CFPreferences；日期仅诊断不参与判断
         NSInteger result = (fileValEffective > 0) ? fileValEffective : cfVal;
-        HBProbeLog(@"READ_FAKE: sharedFile=%ld(today=%d) selfFile=%ld(today=%d) cfPref=%ld(today=%d) -> using=%ld",
+        HBProbeLog(@"READ_VIRTUAL: sharedFile=%ld(today=%d) selfFile=%ld(today=%d) cfPref=%ld(today=%d) -> virtualOffset=%ld",
                    (long)sharedVal, sharedFresh, (long)fileVal, fileFresh, (long)cfVal, cfFresh, (long)result);
         if (result == 99999 || result > 200000 || result <= 0) {
-            HBProbeLog(@"READ_FAKE_IGNORE: value=%ld 疑似残留脏值/哨兵，跳过伪造（显示真实步数）", (long)result);
+            HBProbeLog(@"READ_VIRTUAL_IGNORE: value=%ld 疑似残留脏值/哨兵/零增量，跳过累加（显示真实步数）", (long)result);
             return 0;
         }
         return result;
@@ -315,78 +318,51 @@ static BOOL HBIsStepType(id type) {
 }
 
 // 路径一：CMPedometerData.numberOfSteps（微信命中，1.0.131 验证可用）
+// 新逻辑：显示 = 真实步数(orig) + 虚拟步数(增量)
+//
+// 为什么此处必须叠加虚拟增量（而非直通）：
+//   CoreMotion 的 CMPedometer 读数来自设备运动协处理器，【不会】包含 App 写入 HealthKit 的
+//   合成步数样本。因此若 tweak 直通，微信经此通道只能拿到「真实步数」(常≈0)，而「健康」App
+//   读 HealthKit 拿到「真实+虚拟」，两者对不上（Bug2），且微信步数≈0（Bug1）。
+//   本通道仅作用于微信（tweak 只注入 com.tencent.xin），健康 App 不经此 hook，不会双重加。
+//   HealthKit 三条路径保持直通：健康 App 读合成样本得 真实+虚拟，微信若走 HealthKit 同样 真实+虚拟，
+//   两通道数值一致、互不累加。
 static NSNumber *(*orig_numberOfSteps)(id, SEL) = NULL;
 static NSNumber *new_numberOfSteps(id self, SEL _cmd) {
-    NSInteger fake = HBReadFakeSteps();
-    if (fake > 0) return @(fake);
-    return orig_numberOfSteps(self, _cmd);
+    NSNumber *real = orig_numberOfSteps ? orig_numberOfSteps(self, _cmd) : nil;
+    NSInteger virtual = HBReadVirtualSteps();
+    HBProbeLog(@"NUM_STEPS: real=%@ virtual=%ld -> 返回 real+virtual", real, (long)virtual);
+    if (virtual > 0 && real != nil) {
+        long total = (long)[real longValue] + (long)virtual;
+        return @(total);
+    }
+    return real;
 }
 
 // 路径二：HKStatistics 聚合查询（备用通道）
+// 新逻辑：显示 = 真实聚合值(orig) + 虚拟步数(增量)
 static id (*orig_sumQ)(id, SEL) = NULL;
 static id new_sumQ(id self, SEL _cmd) {
-    if (HBIsStepType([self quantityType])) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0) {
-            static BOOL sumLogged = NO;
-            if (!sumLogged) {
-                sumLogged = YES;
-                HBProbeLog(@"HKSTAT_SUM: returning fake=%ld", (long)fake);
-            }
-            HKUnit *unit = [HKUnit countUnit];
-            return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
-        }
-    }
-    return orig_sumQ(self, _cmd);
+    // 方案A 直通：HKStatisticsQuery 聚合已含 App 写入的合成步数(虚拟增量)，直接返回原值。
+    id result = orig_sumQ ? orig_sumQ(self, _cmd) : nil;
+    HBProbeLog(@"HKSTAT_SUM passthrough: 返回 Health 原值(含虚拟增量)");
+    return result;
 }
 
 static id (*orig_avgQ)(id, SEL) = NULL;
 static id new_avgQ(id self, SEL _cmd) {
-    if (HBIsStepType([self quantityType])) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0) {
-            static BOOL avgLogged = NO;
-            if (!avgLogged) {
-                avgLogged = YES;
-                HBProbeLog(@"HKSTAT_AVG: returning fake=%ld", (long)fake);
-            }
-            HKUnit *unit = [HKUnit countUnit];
-            return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
-        }
-    }
-    return orig_avgQ(self, _cmd);
+    // 方案A 直通：同上，直接返回 Health 原值。
+    id result = orig_avgQ ? orig_avgQ(self, _cmd) : nil;
+    HBProbeLog(@"HKSTAT_AVG passthrough: 返回 Health 原值(含虚拟增量)");
+    return result;
 }
 
 // 路径三：HKSampleQuery 逐样本查询（备用通道）
+// 新逻辑：把返回的真实样本求和，再加上虚拟步数增量，用单个聚合样本替换返回。
 static id (*orig_SQ_init)(id, SEL, id, id, unsigned long, id, id) = NULL;
 static id new_SQ_init(id self, SEL _cmd,
                       id type, id pred, unsigned long limit, id sorts, id handler) {
-    if (HBIsStepType(type)) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0 && handler) {
-            static BOOL sqLogged = NO;
-            if (!sqLogged) {
-                sqLogged = YES;
-                HBProbeLog(@"HKSAMPLE_QUERY: intercepting step query, returning fake=%ld", (long)fake);
-            }
-            id origHandler = handler;
-            id newHandler = ^(id q, id results, id error) {
-                @autoreleasepool {
-                    HKUnit *unit = [HKUnit countUnit];
-                    HKQuantity *qty = [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
-                    HKQuantitySample *sample = [HKQuantitySample
-                        quantitySampleWithType:type
-                                      quantity:qty
-                                     startDate:[NSDate dateWithTimeIntervalSince1970:0]
-                                       endDate:[NSDate date]];
-                    NSArray *newResults = @[ sample ];
-                    void (^h)(id, id, id) = origHandler;
-                    h(q, newResults, error);
-                }
-            };
-            return orig_SQ_init(self, _cmd, type, pred, limit, sorts, newHandler);
-        }
-    }
+    // 方案A 直通：App 已把虚拟步数写进 Health，逐样本查询返回原结果即可，不再叠加。
     return orig_SQ_init(self, _cmd, type, pred, limit, sorts, handler);
 }
 
