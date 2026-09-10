@@ -1,46 +1,71 @@
 #!/var/jb/usr/bin/bash
 set -e
 
-# HealthBoost post-install script
-# Configures LaunchDaemon and creates default config
+# HealthBoost post-install
+# 1) 刷新图标缓存让 SpringBoard 注册 UCS.app
+# 2) 杀掉微信让 tweak 下次启动加载最新步数
+# 3) 注册/启动后台守护进程（锁屏每日自动生成）
+# 4) 写入守护进程默认配置（App 保存设置时会覆盖此文件）
 
 ROOTHIDE=0
 [ -L /var/jb ] && ROOTHIDE=1
 
-if [ $ROOTHIDE -eq 1 ]; then
-    # Rooothide: use launchctl enable/bootstrap/kickstart
-    if [ -f /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist ]; then
-        launchctl enable "system/com.sykes.healthboost" 2>/dev/null || true
-        launchctl bootstrap system /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
-        launchctl kickstart -k system/com.sykes.healthboost 2>/dev/null || true
-    fi
-else
-    # Rootless: use launchctl load/unload
-    launchctl unload /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
-    if [ -f /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist ]; then
-        chmod 644 /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist
-        launchctl load /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
-    fi
+# 刷新图标缓存，让 SpringBoard 注册 UCS.app
+if [ -x /var/jb/usr/bin/uicache ]; then
+  /var/jb/usr/bin/uicache -a 2>/dev/null || true
+  /var/jb/usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
+elif [ -x /usr/bin/uicache ]; then
+  /usr/bin/uicache -a 2>/dev/null || true
+  /usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
 fi
 
-# Create default config if not exists
-if [ ! -f /var/jb/Library/HealthBoost/config.plist ]; then
-    mkdir -p /var/jb/Library/HealthBoost
-    cat > /var/jb/Library/HealthBoost/config.plist << 'EOF'
+# 杀掉微信，让 tweak 下次启动加载最新步数
+for k in /var/jb/bin/killall /usr/bin/killall killall; do
+  if [ -x "$k" ]; then
+    "$k" -9 WeChat 2>/dev/null || true
+    break
+  fi
+done
+
+# 注册/启动后台守护进程（锁屏每日自动生成）
+if [ -f /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist ]; then
+  if [ $ROOTHIDE -eq 1 ]; then
+    launchctl enable "system/com.sykes.healthboost" 2>/dev/null || true
+    launchctl bootstrap system /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
+    launchctl kickstart -k system/com.sykes.healthboost 2>/dev/null || true
+  else
+    launchctl unload /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
+    chmod 644 /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist
+    launchctl load /var/jb/Library/LaunchDaemons/com.sykes.healthboost.plist 2>/dev/null || true
+  fi
+fi
+
+# 守护进程默认配置（App 保存设置时会覆盖；默认禁用以免误生成）
+CONF_DIR=/var/mobile/Media/HealthBoost
+CONF="$CONF_DIR/config.plist"
+if [ ! -f "$CONF" ]; then
+  mkdir -p "$CONF_DIR"
+  cat > "$CONF" << 'PLIST_EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>enabled</key>
+    <false/>
     <key>steps</key>
-    <integer>0</integer>
+    <integer>1000</integer>
     <key>distance</key>
-    <real>0.0</real>
+    <real>700.0</real>
     <key>flights</key>
+    <integer>5</integer>
+    <key>hour</key>
+    <integer>9</integer>
+    <key>minute</key>
     <integer>0</integer>
 </dict>
 </plist>
-EOF
-    chown -R mobile:mobile /var/jb/Library/HealthBoost 2>/dev/null || true
+PLIST_EOF
+  chown -R mobile:mobile "$CONF_DIR" 2>/dev/null || true
 fi
 
 exit 0

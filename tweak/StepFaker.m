@@ -127,66 +127,61 @@ static void HBParseStepsFile(NSString *path, NSInteger *outVal, BOOL *outFresh) 
     *outFresh = fresh;
 }
 
+// 读取单条步数文件的值（不带日志），供多通道合并使用。
+static NSInteger HBReadOneFile(NSString *path) {
+    NSInteger v = 0; BOOL fresh = NO;
+    HBParseStepsFile(path, &v, &fresh);
+    return v;
+}
+
 // 读取目标步数（0 = 不篡改，原样放行）。
-// v1.0.202：文件值 = 当前目标，不限「今天」；日期只进日志。
+// v2.1.2：roothide 路径重映射鲁棒化 —— 同时枚举【真实】与【roothide 重映射】
+// 两套视图下的所有可能落点（/var/mobile/Documents、Media、微信容器、UCS 容器、
+// 进程自身容器），取所有通道里最大的正值为准。无论 roothide 是否对 App 重映射
+// /var/mobile，至少有一对「App 写入点」与「微信读取点」会落到同一真实文件，
+// 从而彻底解决「健康加、微信没加」。
 static NSInteger HBReadVirtualSteps(void) {
     @autoreleasepool {
-        // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入）
-        NSInteger fileVal = 0;
-        BOOL fileFresh = NO;
-        NSString *filePath = nil;
-        NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
+        NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+        [candidates addObject:@"/var/mobile/Documents/hb_steps.txt"];
+        [candidates addObject:@"/var/roothide/var/mobile/Documents/hb_steps.txt"];
+        [candidates addObject:@"/var/mobile/Media/HealthBoost/hb_steps.txt"];
+        [candidates addObject:@"/var/roothide/var/mobile/Media/HealthBoost/hb_steps.txt"];
+        // 进程自身容器（微信进程即微信容器，UCS 进程即 UCS 容器）
+        NSArray<NSString *> *docs = NSSearchPathForDirectoriesInDomains(
             NSDocumentDirectory, NSUserDomainMask, YES);
-        NSString *doc = paths.firstObject;
-        if (doc.length > 0) {
-            filePath = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
-            HBParseStepsFile(filePath, &fileVal, &fileFresh);
+        if (docs.firstObject) {
+            [candidates addObject:[docs.firstObject stringByAppendingPathComponent:@"hb_steps.txt"]];
         }
-        // ② 共享通道：App 把假步数统一写到用户 home 的
-        //    /var/mobile/Documents/hb_steps.txt，任何进程都能直接读到，
-        //    不依赖各 App 自身沙盒容器。
-        NSInteger sharedVal = 0;
-        BOOL sharedFresh = NO;
-        HBParseStepsFile(@"/var/mobile/Documents/hb_steps.txt", &sharedVal, &sharedFresh);
-
-        // ②b roothide 修复（核心）：UCS App 是 roothide 应用，其 /var/mobile 被重映射
-        //    到 /var/roothide/var/mobile。App 写的 /var/mobile/Documents/hb_steps.txt
-        //    实际落在真实路径 /var/roothide/var/mobile/Documents/hb_steps.txt；而本 tweak
-        //    注入到微信（普通 App）时看到的是真实 /var/mobile，读不到那个文件 —— 这正是
-        //    「健康加、微信没加」的根因。这里额外读 roothide 前缀下的真实文件补全通道。
-        NSInteger rhVal = 0;
-        BOOL rhFresh = NO;
-        HBParseStepsFile(@"/var/roothide/var/mobile/Documents/hb_steps.txt", &rhVal, &rhFresh);
-
-        // ②c roothide 修复：读取 UCS App 自身容器（com.sykes.ucs.app）。普通 App 进程的
-        //    tweak 枚举真实 /var/roothide/var/mobile/Containers/Data/Application，找到
-        //    com.sykes.ucs.app 容器后读其 Documents/hb_steps.txt —— 与 App 落盘位置一致，
-        //    是另一条不依赖 /var/mobile 重映射的稳妥通道。
-        NSInteger appContainerVal = 0;
-        BOOL appContainerFresh = NO;
-        {
-            NSString *base = @"/var/roothide/var/mobile/Containers/Data/Application";
+        // 枚举微信 / UCS 容器：真实视图 + roothide 重映射视图
+        NSArray<NSString *> *bases = @[
+            @"/var/mobile/Containers/Data/Application",
+            @"/var/roothide/var/mobile/Containers/Data/Application"
+        ];
+        for (NSString *base in bases) {
             NSArray *dirs = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:base error:nil];
             for (NSString *d in dirs) {
                 NSString *meta = [base stringByAppendingFormat:@"/%@/.com.apple.mobile_container_manager.metadata.plist", d];
                 NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:meta];
-                if ([[dict objectForKey:@"MCMMetadataIdentifier"] isEqualToString:@"com.sykes.ucs.app"]) {
-                    NSString *p = [base stringByAppendingFormat:@"/%@/Documents/hb_steps.txt", d];
-                    HBParseStepsFile(p, &appContainerVal, &appContainerFresh);
-                    break;
+                NSString *ident = dict[@"MCMMetadataIdentifier"];
+                if ([ident isEqualToString:@"com.tencent.xin"] ||
+                    [ident isEqualToString:@"com.sykes.ucs.app"] ||
+                    [ident hasPrefix:@"com.tencent"]) {
+                    [candidates addObject:[base stringByAppendingFormat:@"/%@/Documents/hb_steps.txt", d]];
                 }
             }
         }
 
-        // 合并优先级：App 自身容器 > roothide 共享文件 > 普通共享文件 > 进程自身容器
-        NSInteger fileValEffective = 0;
-        if      (appContainerVal > 0) fileValEffective = appContainerVal;
-        else if (rhVal > 0)          fileValEffective = rhVal;
-        else if (sharedVal > 0)      fileValEffective = sharedVal;
-        else                         fileValEffective = fileVal;
+        NSInteger best = 0;
+        NSMutableString *dbg = [NSMutableString stringWithString:@"READ_VIRTUAL"];
+        for (NSString *p in candidates) {
+            NSInteger v = HBReadOneFile(p);
+            if (v > best) best = v;
+            [dbg appendFormat:@" | %@=%ld", p, (long)v];
+        }
 
+        // CFPreferences 系统域兜底（数据库，不受文件路径重映射影响）
         NSInteger cfVal = 0;
-        BOOL cfFresh = NO;
         CFPropertyListRef val = CFPreferencesCopyValue(
             CFSTR("steps"),
             CFSTR("com.apple.mobile.healthboost"),
@@ -200,26 +195,15 @@ static NSInteger HBReadVirtualSteps(void) {
             }
             CFRelease(val);
         }
-        CFPropertyListRef dateVal = CFPreferencesCopyValue(
-            CFSTR("stepsDate"),
-            CFSTR("com.apple.mobile.healthboost"),
-            kCFPreferencesAnyUser,
-            kCFPreferencesAnyHost);
-        if (dateVal) {
-            if (CFGetTypeID(dateVal) == CFStringGetTypeID()) {
-                cfFresh = [(__bridge NSString *)dateVal isEqualToString:HBFakeTodayString()];
-            }
-            CFRelease(dateVal);
-        }
-        // 优先共享文件，其次进程容器文件，最后 CFPreferences；日期仅诊断不参与判断
-        NSInteger result = (fileValEffective > 0) ? fileValEffective : cfVal;
-        HBProbeLog(@"READ_VIRTUAL: selfFile=%ld shared=%ld rh=%ld appContainer=%ld cfPref=%ld -> virtualOffset=%ld",
-                   (long)fileVal, (long)sharedVal, (long)rhVal, (long)appContainerVal, (long)cfVal, (long)result);
-        if (result == 99999 || result > 200000 || result <= 0) {
-            HBProbeLog(@"READ_VIRTUAL_IGNORE: value=%ld 疑似残留脏值/哨兵/零增量，跳过累加（显示真实步数）", (long)result);
+        if (cfVal > best) best = cfVal;
+        [dbg appendFormat:@" | cfPref=%ld -> virtualOffset=%ld", (long)cfVal, (long)best];
+
+        HBProbeLog(@"%@%@", dbg, (best>0 ? @"" : @" (zero)"));
+        if (best == 99999 || best > 200000 || best <= 0) {
+            HBProbeLog(@"READ_VIRTUAL_IGNORE: value=%ld 脏值/哨兵/零，跳过累加（显示真实步数）", (long)best);
             return 0;
         }
-        return result;
+        return best;
     }
 }
 

@@ -8,14 +8,27 @@
     <array>
         <string>/var/jb/usr/bin/HealthBoost</string>
     </array>
+    <key>UserName</key>
+    <string>mobile</string>
+    <key>GroupName</key>
+    <string>mobile</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <false/>
+    <!-- 每 15 分钟唤起一次；守护进程内部判断“是否已到计划时间且今日未生成”，
+         因此能精确在用户设定的 hour:minute 触发每日自动生成，且无视锁屏状态。 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Minute</key><integer>15</integer></dict>
+        <dict><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Minute</key><integer>45</integer></dict>
+    </array>
     <key>StandardOutPath</key>
-    <string>/var/jb/Library/HealthBoost/healthboost.log</string>
+    <string>/var/mobile/Media/HealthBoost/daemon.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/jb/Library/HealthBoost/healthboost.log</string>
+    <string>/var/mobile/Media/HealthBoost/daemon.stderr.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>

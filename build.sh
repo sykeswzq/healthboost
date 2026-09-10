@@ -19,8 +19,9 @@ set -euo pipefail
 #      （见 HealthBoost.entitlements.plist）。
 # ============================================================================
 
-# 版本号：v2.1.1（修复 roothide 路径重映射导致微信读不到虚拟步数；必须 >2.1 否则 Sileo 当降级）
-VER="2.1.1"
+# 版本号：v2.1.2（锁屏每日自动生成回归修复：重写守护进程为定时 LaunchDaemon，
+# 写设备源增量样本；并修复健康/微信叠加步数。必须 >2.1.1 否则 Sileo 当降级）
+VER="2.1.2"
 echo "版本号: $VER"
 PKG="com.sykes.ucs"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
@@ -29,6 +30,8 @@ echo "[1/5] 创建 staging 目录（roothide 根相对 ./Applications + ./Librar
 rm -rf staging tweak_staging pkg
 mkdir -p staging/Applications/UCS.app
 mkdir -p staging/Library/MobileSubstrate/DynamicLibraries
+mkdir -p staging/usr/bin
+mkdir -p staging/Library/LaunchDaemons
 mkdir -p staging/DEBIAN
 mkdir -p tweak_staging/Library/MobileSubstrate/DynamicLibraries
 
@@ -124,6 +127,40 @@ cp tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist stagin
 chmod 755 staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
 chmod 644 staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
 
+echo "[4.5/5] 编译并签名后台守护进程（锁屏每日自动生成用，独立二进制）"
+xcrun --sdk iphoneos clang \
+  -framework Foundation -framework HealthKit \
+  -fobjc-arc \
+  -arch arm64 -arch arm64e \
+  -mios-version-min=13.0 \
+  -isysroot "$SDK" \
+  -o staging/usr/bin/HealthBoost \
+  src/HealthBoostDaemon.m
+chmod 755 staging/usr/bin/HealthBoost
+echo "  daemon: $(wc -c < staging/usr/bin/HealthBoost) bytes"
+
+if ! command -v ldid >/dev/null 2>&1; then
+  echo "ERROR: ldid 未安装，无法签名守护进程，终止构建"
+  exit 1
+fi
+ldid -M -SHealthBoost.entitlements.plist staging/usr/bin/HealthBoost
+echo "  已用 ldid 重签守护进程"
+
+if ! ldid -e staging/usr/bin/HealthBoost 2>/dev/null | grep -q "healthkit"; then
+  echo "ERROR: 守护进程签名后未检测到 healthkit 权限，终止构建"
+  exit 1
+fi
+dmagic=$(xxd -p -l4 staging/usr/bin/HealthBoost 2>/dev/null || od -An -tx1 -N4 staging/usr/bin/HealthBoost | tr -d ' \n')
+if [ "$dmagic" != "cafebabe" ]; then
+  echo "ERROR: 守护进程 Mach-O 头异常 (magic=$dmagic)，终止构建"
+  exit 1
+fi
+echo "  守护进程签名校验通过: healthkit 权限存在，Mach-O 头正常"
+
+cp com.sykes.healthboost.plist staging/Library/LaunchDaemons/com.sykes.healthboost.plist
+chmod 644 staging/Library/LaunchDaemons/com.sykes.healthboost.plist
+echo "  已打包 LaunchDaemon plist"
+
 echo "[5/5] 生成 control / postinst 并打包（单一 deb）"
 cat > staging/DEBIAN/control << EOF
 Package: com.sykes.ucs
@@ -139,26 +176,7 @@ Section: utilities
 Priority: optional
 EOF
 
-cat > staging/DEBIAN/postinst << 'EOF'
-#!/bin/sh
-# roothide 上 App 在 /Applications（= /var/roothide/Applications）。
-# 刷新图标缓存，让 SpringBoard 注册这个新 App（uicache -a 全量，再显式补一次路径）。
-if [ -x /var/jb/usr/bin/uicache ]; then
-  /var/jb/usr/bin/uicache -a 2>/dev/null || true
-  /var/jb/usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
-elif [ -x /usr/bin/uicache ]; then
-  /usr/bin/uicache -a 2>/dev/null || true
-  /usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
-fi
-# 装完强制杀掉微信，让 tweak 在下次启动时加载并读取最新步数。
-for k in /var/jb/bin/killall /usr/bin/killall killall; do
-  if [ -x "$k" ]; then
-    "$k" -9 WeChat 2>/dev/null || true
-    break
-  fi
-done
-exit 0
-EOF
+cp debian/postinst staging/DEBIAN/postinst
 
 chmod 755 staging/DEBIAN/postinst
 
