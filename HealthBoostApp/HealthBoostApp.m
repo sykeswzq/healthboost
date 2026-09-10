@@ -1649,6 +1649,8 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     HBWriteStepsPreference(steps);
 
+    // v2.2.6 修复：必须把虚拟步数写入 HealthKit，微信才能通过 HKStatistics 路径读到
+    [self writeVirtualStepSample:steps];
 
 
     if (![HKHealthStore isHealthDataAvailable]) {
