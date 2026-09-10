@@ -194,15 +194,17 @@ int main(int argc, const char * argv[]) {
             return 0;
         }
 
-        // 是否到达计划时间窗口（15 分钟容差，兼容任意分钟，含 45 分以后）
+        // 是否到达计划时间窗口（前后 15 分钟容差，兼容任意分钟，含 45 分以后）
         NSCalendar *cal = [NSCalendar currentCalendar];
         NSDateComponents *nowc = [cal components:NSCalendarUnitHour|NSCalendarUnitMinute fromDate:[NSDate date]];
         NSInteger nowMin = nowc.hour * 60 + nowc.minute;
         NSInteger cfgMin = cfgHour * 60 + cfgMinute;
-        NSInteger diff = (nowMin - cfgMin + 1440) % 1440;
-        if (diff > 15) {
-            HBLog(@"未到计划时间(%02ld:%02ld)，当前 %02ld:%02ld，距窗口 %ld 分，跳过",
-                  (long)cfgHour, (long)cfgMinute, (long)nowc.hour, (long)nowc.minute, (long)diff);
+        // 计算当前时间距计划时间的绝对分钟差（考虑跨天）
+        NSInteger forwardDiff = (cfgMin - nowMin + 1440) % 1440;   // 距离下次计划时间还有多少分钟
+        NSInteger backwardDiff = (nowMin - cfgMin + 1440) % 1440;  // 距离上次计划时间过了多少分钟
+        if (forwardDiff > 15 && backwardDiff > 15) {
+            HBLog(@"未到计划时间窗口，当前 %02ld:%02ld，下次计划 %02ld:%02ld（距 %ld 分），跳过",
+                  (long)nowc.hour, (long)nowc.minute, (long)cfgHour, (long)cfgMinute, (long)forwardDiff);
             return 0;
         }
         HBLog(@"到达计划时间窗口，开始生成（虚拟=%ld, 距离=%.0f, 楼层=%ld）", virtual, distance, flights);
