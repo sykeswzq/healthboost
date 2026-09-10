@@ -161,8 +161,8 @@ int main(int argc, const char *argv[]) {
             }
             HBLog(@"待删除旧合成样本=%lu", (unsigned long)old.count);
             if (old.count == 0) { dispatch_semaphore_signal(semDel); return; }
-            [store deleteObjects:old withCompletion:^(BOOL success, NSUInteger n, NSError *e2) {
-                HBLog(@"删除旧合成样本 ok=%d n=%lu %@", success, (unsigned long)n, e2 ? e2.localizedDescription : @"");
+            [store deleteObjects:old withCompletion:^(BOOL success, NSError *e2) {
+                HBLog(@"删除旧合成样本 ok=%d %@", success, e2 ? e2.localizedDescription : @"");
                 dispatch_semaphore_signal(semDel);
             }];
         }];
