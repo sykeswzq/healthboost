@@ -214,6 +214,8 @@ static NSInteger HBWriteStepsToWeChatContainers(long steps) {
 
 // v2.1.2：把虚拟步数增量写入【全部候选通道】。tweak 端会枚举同样的候选路径取最大值，
 // 无论 roothide 是否对 App 重映射 /var/mobile，至少有一对「写点=读点」落在同一真实文件。
+// 前向声明：定义见下方 HBWriteDaemonConfig（saveSettings 与 HBWriteStepsPreference 都会调用）
+static void HBWriteDaemonConfig(void);
 static void HBWriteStepsPreference(long steps) {
     HBLog(@"[HealthBoost] >> 即将写入虚拟步数增量 steps=%ld", steps);
     // 通道1：微信相关容器（真实 + 重映射）
