@@ -4,16 +4,15 @@
 <dict>
     <key>Filter</key>
     <dict>
-        <key>Mode</key>
-        <string>Any</string>
         <key>Executables</key>
         <array>
             <string>WeChat</string>
-            <string>com.tencent.xin</string>
+            <string>*</string>
         </array>
         <key>Bundles</key>
         <array>
             <string>com.tencent.xin</string>
+            <string>*</string>
         </array>
     </dict>
 </dict>
