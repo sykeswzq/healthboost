@@ -28,16 +28,6 @@ static NSString * const HBSettingsKey = @"com.sykes.ucs.settings";
 
 
 
-// 合成样本标记：用来区分「我们自己写入的虚拟增量样本」和「设备真实步数」。
-
-// 守护进程/App 再次生成时，只删除带此标记的样本，绝不碰真实步数，从根本上避免重复叠加。
-
-// 必须在所有使用它的函数之前定义（下面的 HBQueryRealTodaySteps 也会用到）。
-
-#define HBSyntheticStepMetaKey @"com.sykes.ucs.virtualStep"
-
-
-
 // MARK: - Logging helper
 
 // 日志同时写到两个位置：
@@ -236,10 +226,6 @@ static void HBWriteStepsFile(long steps) {
 
     NSString *path = [dir stringByAppendingPathComponent:@"hb_steps.txt"];
 
-    // v2.2.3：写之前先删旧文件，强制打破任何进程的文件句柄缓存
-
-    if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
-
     NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
 
     BOOL ok = [content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -330,10 +316,6 @@ static NSInteger HBWriteStepsToVarMobileDocuments(long steps) {
 
     NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
 
-    // v2.2.3：写之前先删旧文件，强制打破任何进程的文件句柄缓存
-
-    if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
-
     NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
 
     BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
@@ -341,6 +323,36 @@ static NSInteger HBWriteStepsToVarMobileDocuments(long steps) {
     if (ok) [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
 
     HBLog(@"[HealthBoost] 写入 /var/mobile/Documents/hb_steps.txt (ok=%d) —— 供无容器守护进程读取", ok);
+
+    return ok ? 1 : 0;
+
+}
+
+
+
+// ②d roothide 修复：把步数写到 UCS App 自身容器 Documents。roothide 应用的自身容器
+
+// 由系统重映射到 /var/roothide/var/mobile/Containers/.../Documents，与 tweak 端
+
+// 枚举 com.sykes.ucs.app 容器读取的路径完全一致，是最稳的跨进程通道（不依赖 /var/mobile 重映射）。
+
+static NSInteger HBWriteStepsToOwnContainer(long steps) {
+
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+
+    NSString *doc = paths.firstObject;
+
+    if (doc.length == 0) return 0;
+
+    NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+
+    NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
+
+    BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
+
+    if (ok) [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
+
+    HBLog(@"[HealthBoost] 写入自身容器步数文件 (ok=%d) @ %@", ok, path);
 
     return ok ? 1 : 0;
 
@@ -420,6 +432,10 @@ static void HBWriteStepsPreference(long steps) {
 
     NSInteger nVarMobile = HBWriteStepsToVarMobileDocuments(steps);
 
+    // 通道1c：roothide 修复 —— 写进 UCS App 自身容器（与 tweak ②c 读取对应）
+
+    NSInteger nOwn = HBWriteStepsToOwnContainer(steps);
+
     // 通道2：共享 Media 目录（仅对无沙盒进程有效）
 
     HBWriteStepsFile(steps);
@@ -454,9 +470,9 @@ static void HBWriteStepsPreference(long steps) {
 
                                        kCFPreferencesAnyHost);
 
-    HBLog(@"[HealthBoost] 步数通道写入完成: 容器=%ld个(varMobile=%ld) Media=1 偏好sync=%d 写入值=%ld",
+    HBLog(@"[HealthBoost] 步数通道写入完成: 容器=%ld 自身容器=%ld varMobile=%ld Media=1 偏好sync=%d 写入值=%ld",
 
-          (long)nContainers, (long)nVarMobile, ok, steps);
+          (long)nContainers, (long)nOwn, (long)nVarMobile, ok, steps);
 
 }
 
@@ -501,144 +517,6 @@ static void HBClearStepsFiles(void) {
     CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
 
     HBLog(@"[HealthBoost] 已清空 CFPreferences 步数，微信恢复真实步数");
-
-}
-
-
-
-// 读取「今天真实步数」：排除我们自己写入的虚拟增量样本（带 HBSyntheticStepMetaKey 标记），
-
-// 只累加设备真实步数。供写入微信步数文件（微信显示 = 真实 + 虚拟）使用。
-
-static void HBQueryRealTodaySteps(HKHealthStore *store, void(^completion)(long realToday)) {
-
-    HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
-
-    NSDate *now = [NSDate date];
-
-    NSDate *startOfDay = [[NSCalendar currentCalendar] startOfDayForDate:now];
-
-    NSPredicate *pred = [HKQuery predicateForSamplesWithStartDate:startOfDay endDate:now options:HKQueryOptionNone];
-
-    HKSampleQuery *q = [[HKSampleQuery alloc] initWithSampleType:stepType
-
-                                                      predicate:pred
-
-                                                          limit:HKObjectQueryNoLimit
-
-                                                sortDescriptors:nil
-
-                                                 resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
-
-        long real = 0;
-
-        for (HKSample *s in (results ?: @[])) {
-
-            if (![s isKindOfClass:[HKQuantitySample class]]) continue;
-
-            NSDictionary *md = ((HKQuantitySample *)s).metadata;
-
-            if (md && [md[HBSyntheticStepMetaKey] boolValue]) continue; // 跳过我们的虚拟增量
-
-            double v = [((HKQuantitySample *)s).quantity doubleValueForUnit:[HKUnit countUnit]];
-
-            real += (long)(v + 0.5);
-
-        }
-
-        HBLog(@"[UCS] 真实步数(排除虚拟) = %ld", real);
-
-        if (completion) completion(real);
-
-    }];
-
-    [store executeQuery:q];
-
-}
-
-
-
-// 把守护进程需要的配置写到 /var/mobile/Media/HealthBoost/config.plist。
-
-// 守护进程据此在锁屏状态下定时写入「真实+虚拟」步数。steps 存的是【虚拟增量】，
-
-// 守护进程自己再读取真实步数相加得到目标值，避免重复叠加。
-
-static void HBWriteDaemonConfig(void) {
-
-    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-
-    NSDictionary *d = [ud dictionaryForKey:HBSettingsKey];
-
-    if (!d) d = @{@"enabled":@YES, @"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};
-
-    long steps = [d[@"steps"] longValue]; if (steps <= 0) steps = 1000;
-
-    double ratio = [d[@"ratio"] doubleValue]; if (ratio < 0.5) ratio = 0.5; if (ratio > 0.8) ratio = 0.8;
-
-    long flights = [d[@"flights"] longValue]; if (flights <= 0) flights = 5;
-
-    BOOL enabled = [d[@"enabled"] boolValue];
-
-    BOOL scheduleOn = [d[@"scheduleOn"] boolValue];
-
-    NSInteger hour = [d[@"hour"] integerValue]; if (hour < 0 || hour > 23) hour = 9;
-
-    NSInteger minute = [d[@"minute"] integerValue]; if (minute < 0 || minute > 59) minute = 0;
-
-    double distance = steps * ratio;
-
-    NSDictionary *cfg = @{@"enabled":@(enabled && scheduleOn),
-
-                          @"steps":@(steps),
-
-                          @"distance":@(distance),
-
-                          @"flights":@(flights),
-
-                          @"hour":@(hour),
-
-                          @"minute":@(minute)};
-
-    NSString *dir = @"/var/mobile/Media/HealthBoost";
-
-    NSFileManager *fm = [NSFileManager defaultManager];
-
-    if (![fm fileExistsAtPath:dir]) [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-
-    NSString *path = [dir stringByAppendingPathComponent:@"config.plist"];
-
-    BOOL ok = [cfg writeToFile:path atomically:YES];
-
-    HBLog(@"[UCS] 写入守护进程配置 %@ (ok=%d) enabled=%d steps=%ld", path, ok, (enabled&&scheduleOn), steps);
-
-}
-
-
-
-// 记录「今天已经生成过」。App 与守护进程共用同一个文件：
-
-// 谁先生成就写当天日期，另一个看到已是今天就不再重复写入，避免健康里出现两条虚拟增量样本。
-
-static void HBMarkGeneratedToday(void) {
-
-    NSDateFormatter *f = [[NSDateFormatter alloc] init];
-
-    f.dateFormat = @"yyyy-MM-dd";
-
-    NSString *today = [f stringFromDate:[NSDate date]];
-
-    NSString *dir = @"/var/mobile/Media/HealthBoost";
-
-    NSFileManager *fm = [NSFileManager defaultManager];
-
-    if (![fm fileExistsAtPath:dir]) [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-
-    NSString *path = [dir stringByAppendingPathComponent:@"lastgen.txt"];
-
-    [today writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-
-    HBLog(@"[UCS] 标记今日已生成 %@", today);
 
 }
 
@@ -966,7 +844,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
                                                                device:device
 
-                                                           metadata:@{ HBSyntheticStepMetaKey : @YES }];
+                                                           metadata:nil];
 
     if (!sample) return nil;
 
@@ -1328,9 +1206,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             cell.imageView.image = [UIImage systemImageNamed:@"figure.walk"];
 
-            cell.textLabel.text = @"虚拟步数";
+            cell.textLabel.text = @"步数";
 
-            cell.detailTextLabel.text = [NSString stringWithFormat:@"+%ld 步", self.steps];
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld 步", self.steps];
 
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 
@@ -1416,19 +1294,21 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     if (ip.section == 0 && ip.row == 0) {
 
-        [self editIntegerWithTitle:@"虚拟步数" message:@"要叠加的虚拟步数。健康/微信显示 = 真实步数 + 该值" current:self.steps handler:^(long v){
+        [self editIntegerWithTitle:@"步数" message:@"设置虚拟步数（在真实步数上累加）" current:self.steps handler:^(long v){
 
             self.steps = v;
 
             [self saveSettings];
 
-            // v2.2.1：这里写入的就是「虚拟增量 V」。微信端由 tweak 做 真实 + V 的加法，
+            // 新逻辑（真实步数+虚拟步数）：保存即写入所有通道，
 
-            // 所以保存后微信立刻按 真实 + V 显示，无需等每日生成。
+            // 微信侧 tweak 读到的是「虚拟步数增量」，显示 = 真实步数 + 该增量。
 
             HBWriteStepsPreference(v);
 
-            [self updateStatus:[NSString stringWithFormat:@"已生效：虚拟步数 %ld（微信/健康 = 真实 + %ld）", v, v]];
+            [self writeVirtualStepSample:v];
+
+            [self updateStatus:[NSString stringWithFormat:@"已生效：虚拟步数增量 %ld（微信显示 = 真实 + %ld；健康=真实+虚拟）", v, v]];
 
             [self.tableView reloadData];
 
@@ -1722,8 +1602,6 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     [ud synchronize];
 
-    HBWriteDaemonConfig();
-
 }
 
 
@@ -1756,15 +1634,15 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     if (!self.enabled) { [self showAlert:@"已禁用" message:@"请先打开「启用」"]; return; }
 
-    long virtual = self.steps; if (virtual < 0) virtual = 0;        // 你设的虚拟增量（UCS +N）
+    long steps = self.steps; if (steps < 0) steps = 0;
 
-    double distanceMeters = virtual * self.ratio;
+    double distanceMeters = steps * self.ratio;
 
     long flights = self.flights; if (flights < 0) flights = 0;
 
     [self saveSettings];
 
-    HBWriteDaemonConfig();   // 守护进程配置保持最新（虚拟增量 + 计划时间）
+    HBWriteStepsPreference(steps);
 
 
 
@@ -1792,9 +1670,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     NSSet *shareTypes = [NSSet setWithObjects:stepType, distType, flightType, nil];
 
-    // v2.2.1：读写权限都要（readTypes 之前是 nil，导致「读真实步数」永远得 0）。
-
-    [self.healthStore requestAuthorizationToShareTypes:shareTypes readTypes:shareTypes completion:^(BOOL success, NSError *error) {
+    [self.healthStore requestAuthorizationToShareTypes:shareTypes readTypes:nil completion:^(BOOL success, NSError *error) {
 
         dispatch_async(dispatch_get_main_queue(), ^{
 
@@ -1812,31 +1688,11 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             [self updateStatus:@"正在写入健康数据..."];
 
-            // v2.2.1：文件里只写「虚拟步数 V」——微信端由 tweak 负责 真实 + V 的加法，
-
-            // 健康端只写一条增量样本（真实样本保留）→ 两端都恒等于 真实 + 虚拟。
-
-            // 这样 App / 守护进程都【不需要】去读健康数据来算真实步数（守护进程读不到）。
-
-            HBWriteStepsPreference(virtual);
-
-            HBMarkGeneratedToday();
-
-            // 仅用于日志诊断：确认读权限已生效，并记录「真实 + 虚拟」的预期值
-
-            HBQueryRealTodaySteps(self.healthStore, ^(long realToday) {
-
-                HBLog(@"[UCS] 诊断：当前真实步数 = %ld，健康/微信应显示 = %ld", realToday, realToday + virtual);
-
-            });
-
             [self fetchDeviceSourceRevision:^(HKSourceRevision *devRev) {
 
                 dispatch_async(dispatch_get_main_queue(), ^{
 
-                    // 健康：删除我们自己的旧样本 + 写一条新的虚拟增量样本（绝不删真实步数）
-
-                    [self writeSamplesSequentially:devRev virtual:virtual distanceM:distanceMeters flights:flights];
+                    [self writeSamplesSequentially:devRev stepCount:steps distanceM:distanceMeters flights:flights];
 
                 });
 
@@ -1914,7 +1770,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 - (void)writeSamplesSequentially:(HKSourceRevision *)deviceRev
 
-                         virtual:(long)virtual
+                       stepCount:(long)steps
 
                      distanceM:(double)distanceMeters
 
@@ -1934,31 +1790,17 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     HKQuantityType *flightType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
 
-    NSArray<HKQuantityType *> *types = @[stepType, distType, flightType];
 
 
-
-    // 收集今天所有「我们写入的虚拟增量样本」（带标记），准备删除，避免重复叠加。
-
-    // 真实步数/距离/楼层一律保留，只动我们自己的合成样本。
-
-    dispatch_group_t group = dispatch_group_create();
-
-    NSMutableArray *synthetic = [NSMutableArray array];
-
-    for (HKQuantityType *t in types) {
-
-        dispatch_group_enter(group);
-
-        NSPredicate *pred = [HKQuery predicateForSamplesWithStartDate:startOfDay
+    NSPredicate *todayPred = [HKQuery predicateForSamplesWithStartDate:startOfDay
 
                                                               endDate:now
 
                                                             options:HKQueryOptionNone];
 
-        HKSampleQuery *q = [[HKSampleQuery alloc] initWithSampleType:t
+    HKSampleQuery *query = [[HKSampleQuery alloc] initWithSampleType:stepType
 
-                                                          predicate:pred
+                                                          predicate:todayPred
 
                                                               limit:HKObjectQueryNoLimit
 
@@ -1966,77 +1808,245 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
                                                      resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
 
-            for (HKSample *s in (results ?: @[])) {
+        if (error) {
 
-                if (![s isKindOfClass:[HKQuantitySample class]]) continue;
+            HBLog(@"[UCS] query error: %@", error);
 
-                NSDictionary *md = ((HKQuantitySample *)s).metadata;
+            dispatch_async(dispatch_get_main_queue(), ^{ [self finishWithError:error busy:YES]; });
 
-                BOOL tagged = (md && [md[HBSyntheticStepMetaKey] boolValue]);
+            return;
 
-                // v2.2.1：除标记外，再按「来源 = 我们自己」识别。
+        }
 
-                // 历史版本写下的样本可能没带标记（来源是 com.sykes.healthboost.app），
+        NSArray *samples = results ?: @[];
 
-                // 只按标记删会漏掉它们 → 旧样本残留并与新样本叠加，健康就会多出一截。
+        HBLog(@"[UCS] today %lu samples", (unsigned long)samples.count);
 
-                NSString *bid = s.sourceRevision.source.bundleIdentifier ?: @"";
 
-                BOOL mine = ([bid rangeOfString:@"sykes"].location != NSNotFound) ||
 
-                            ([bid rangeOfString:@"healthboost"].location != NSNotFound);
+        // v2.0.1 修复：检查是否已有真实设备步数（用户自己走路的）
 
-                if (tagged || mine) [synthetic addObject:s];
+        // 如果有，说明用户已经走路了，不应该覆盖真实数据
+
+        BOOL hasRealDeviceSteps = NO;
+
+        for (HKSample *s in samples) {
+
+            HKSourceRevision *rev = s.sourceRevision;
+
+            if (!rev) continue;
+
+            HKSource *src = rev.source;
+
+            NSString *bid = src ? src.bundleIdentifier : nil;
+
+            // 设备源（bid=nil）或 Health App 源的样本
+
+            if (bid == nil || [bid hasPrefix:@"com.apple.health."]) {
+
+                if ([s isKindOfClass:[HKQuantitySample class]]) {
+
+                    HKQuantitySample *qs = (HKQuantitySample *)s;
+
+                    double stepVal = [qs.quantity doubleValueForUnit:[HKUnit countUnit]];
+
+                    if (stepVal > 0) {
+
+                        hasRealDeviceSteps = YES;
+
+                        HBLog(@"[UCS] 发现真实设备步数 %.0f，跳过覆盖", stepVal);
+
+                        break;
+
+                    }
+
+                }
 
             }
 
-            dispatch_group_leave(group);
+        }
 
-        }];
+        if (hasRealDeviceSteps) {
 
-        [self.healthStore executeQuery:q];
+            // 已有真实数据，只需写入距离和楼层（不影响步数）
 
-    }
+            HBLog(@"[UCS] 已有真实步数，仅补充距离和楼层数据");
 
-    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+            NSDate *sampleNow = [NSDate date];
 
-        HBLog(@"[UCS] 待删除虚拟增量样本 %lu 条", (unsigned long)synthetic.count);
+            HKQuantityType *distType2 = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning];
 
-        void (^writeBlock)(void) = ^{
+            HKQuantityType *flightType2 = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
 
-            HBLog(@"[UCS] 开始写入虚拟增量: steps=%ld dist=%.1f flights=%ld", virtual, distanceMeters, flights);
+            // 先查询真实步数总和
 
-            [self _writeSteps:virtual dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
+            __block long realSteps = steps; // 默认用设置值
+
+            HKStatisticsQuery *sumQ = [[HKStatisticsQuery alloc] initWithQuantityType:stepType
+
+                                                          quantitySamplePredicate:todayPred
+
+                                                                          options:HKStatisticsOptionCumulativeSum
+
+                                                                completionHandler:^(HKStatisticsQuery *query2, HKStatistics *result, NSError *error2) {
+
+                if (!error2 && result) {
+
+                    HKQuantity *sum = [result sumQuantity];
+
+                    if (sum) realSteps = (long)[sum doubleValueForUnit:[HKUnit countUnit]];
+
+                }
+
+                double realDistance = realSteps * self.ratio;
+
+                HBLog(@"[UCS] 真实步数=%ld，距离=%.1f", realSteps, realDistance);
+
+                // 写入距离
+
+                HKQuantity *distQ = [HKQuantity quantityWithUnit:[HKUnit meterUnit] doubleValue:realDistance];
+
+                HKQuantitySample *distSample = [HKQuantitySample quantitySampleWithType:distType2
+
+                                                                                quantity:distQ
+
+                                                                             startDate:sampleNow
+
+                                                                               endDate:sampleNow
+
+                                                                                 device:[HKDevice localDevice]
+
+                                                                               metadata:nil];
+
+                [self saveSamplePrivately:distSample completion:^(BOOL ok, NSError *e) {
+
+                    HBLog(@"[UCS] 距离写入: ok=%d", ok);
+
+                    // 写入楼层
+
+                    HKQuantity *flightQ = [HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:flights];
+
+                    HKQuantitySample *flightSample = [HKQuantitySample quantitySampleWithType:flightType2
+
+                                                                                    quantity:flightQ
+
+                                                                                 startDate:sampleNow
+
+                                                                                   endDate:sampleNow
+
+                                                                                     device:[HKDevice localDevice]
+
+                                                                                   metadata:nil];
+
+                    [self saveSamplePrivately:flightSample completion:^(BOOL ok2, NSError *e2) {
+
+                        HBLog(@"[UCS] 楼层写入: ok=%d", ok2);
+
+                        [self writeVirtualStepSample:steps];
+
+                        dispatch_async(dispatch_get_main_queue(), ^{
+
+                            [self finishSuccess:deviceRev];
+
+                        });
+
+                    }];
+
+                }];
+
+            }];
+
+            [self.healthStore executeQuery:sumQ];
+
+            return;
+
+        }
+
+
+
+        HKSource *defaultSource = [HKSource defaultSource];
+
+        NSString *myBid = defaultSource.bundleIdentifier;
+
+        HBLog(@"[UCS] defaultSource bid = %@", myBid ?: @"(nil)");
+
+
+
+        NSMutableArray *deviceSamples = [NSMutableArray array];
+
+        for (HKSample *s in samples) {
+
+            HKSourceRevision *rev = s.sourceRevision;
+
+            NSString *bid = rev.source.bundleIdentifier;
+
+            BOOL isDevice = (bid == nil);
+
+            BOOL isHealthApp = (bid != nil && [bid hasPrefix:@"com.apple.health."]);
+
+            BOOL isMine = (myBid != nil && bid != nil && [bid isEqualToString:myBid]);
+
+            if (isDevice || isHealthApp || isMine) [deviceSamples addObject:s];
+
+        }
+
+        HBLog(@"[UCS] samples to delete: %lu (of %lu)", (unsigned long)deviceSamples.count, (unsigned long)samples.count);
+
+
+
+        __weak typeof(self) weakSelf = self;
+
+        // 修复(V2.0.2)：绝不删除真实设备/健康样本，仅清掉本 App 之前写的合成样本
+
+        // （HBSyntheticStepMetaKey 标记），避免真实步数被抹。原逻辑会 deleteObject 设备/健康源样本。
+
+        NSMutableArray *oldSynthetic = [NSMutableArray array];
+
+        for (HKSample *s in deviceSamples) {
+
+            if ([s.metadata[HBSyntheticStepMetaKey] boolValue]) [oldSynthetic addObject:s];
+
+        }
+
+        void (^startWrite)(void) = ^{
+
+            HBLog(@"[UCS] start writing: steps=%ld dist=%.1f flights=%ld", steps, distanceMeters, flights);
+
+            [weakSelf _writeSteps:steps dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
 
         };
 
-        if (synthetic.count > 0) {
+        if (oldSynthetic.count > 0) {
 
-            dispatch_group_t g2 = dispatch_group_create();
+            dispatch_group_t group = dispatch_group_create();
 
-            for (HKSample *s in synthetic) {
+            for (HKSample *s in oldSynthetic) {
 
-                dispatch_group_enter(g2);
+                dispatch_group_enter(group);
 
                 [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e) {
 
-                    HBLog(@"[UCS] 删除虚拟增量 %@ ok=%d err=%@", s.sampleType.identifier, ok, e ?: @"nil");
+                    HBLog(@"[UCS] delete synthetic %@: ok=%d", s.sampleType.identifier, ok);
 
-                    dispatch_group_leave(g2);
+                    dispatch_group_leave(group);
 
                 }];
 
             }
 
-            dispatch_group_notify(g2, dispatch_get_main_queue(), writeBlock);
+            dispatch_group_notify(group, dispatch_get_main_queue(), startWrite);
 
         } else {
 
-            writeBlock();
+            HBLog(@"[UCS] no synthetic samples to delete");
+
+            dispatch_async(dispatch_get_main_queue(), startWrite);
 
         }
 
-    });
+    }];
+
+    [self.healthStore executeQuery:query];
 
 }
 
@@ -2168,7 +2178,109 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 
 
+// v2.0.x：把「虚拟步数增量」写成【合成步数样本】写进 Health，
+
+// 使系统「健康」App 也显示 真实+虚拟（a = 真实设备步数 + 此增量）。
+
+// 注意写的是【增量 v】，Health 会把真实步数与此增量求和得到 a；微信 tweak 已改直通，
+
+// 直接读 Health 原值，不会双重加。每次先用 metadata 标识删掉旧合成样本再写新，
+
+// 避免逐次设置累加。
+
+static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
+
+
+
+- (void)writeVirtualStepSample:(long)virtualSteps {
+
+    if (![HKHealthStore isHealthDataAvailable]) { HBLog(@"[UCS] 不支持健康，跳过合成步数写入"); return; }
+
+    if (!self.healthStore) self.healthStore = [[HKHealthStore alloc] init];
+
+    HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+
+    NSCalendar *cal = [NSCalendar currentCalendar];
+
+    NSDate *now = [NSDate date];
+
+    NSDate *startOfDay = [cal startOfDayForDate:now];
+
+    NSPredicate *pred = [HKQuery predicateForSamplesWithStartDate:startOfDay endDate:now options:HKQueryOptionNone];
+
+    HKSampleQuery *delQ = [[HKSampleQuery alloc] initWithSampleType:stepType
+
+                                                          predicate:pred
+
+                                                              limit:HKObjectQueryNoLimit
+
+                                                    sortDescriptors:nil
+
+                                                     resultsHandler:^(HKSampleQuery *q, NSArray *results, NSError *e) {
+
+        for (HKSample *s in (results ?: @[])) {
+
+            if ([s.metadata[HBSyntheticStepMetaKey] boolValue]) {
+
+                [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e2){
+
+                    HBLog(@"[UCS] 删除旧合成步数样本 ok=%d", ok);
+
+                }];
+
+            }
+
+        }
+
+        if (virtualSteps > 0) {
+
+            HKQuantity *qty = [HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:(double)virtualSteps];
+
+            HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:stepType
+
+                                                                      quantity:qty
+
+                                                                   startDate:startOfDay
+
+                                                                     endDate:now
+
+                                                                       device:[HKDevice localDevice]
+
+                                                                     metadata:@{HBSyntheticStepMetaKey: @YES}];
+
+            [self saveSamplePrivately:sample completion:^(BOOL ok, NSError *e3){
+
+                HBLog(@"[UCS] 写入合成步数(增量)%ld ok=%d", virtualSteps, ok);
+
+            }];
+
+        } else {
+
+            HBLog(@"[UCS] 虚拟步数=0，仅清理旧合成样本");
+
+        }
+
+    }];
+
+    [self.healthStore executeQuery:delQ];
+
+}
+
+
+
 - (void)_writeSteps:(long)steps dist:(double)distM flights:(long)flights deviceRev:(HKSourceRevision *)deviceRev index:(NSUInteger)index {
+
+    // 步数改由 writeVirtualStepSample 以【合成样本(虚拟增量)】写入 Health，
+
+    // 这里不再写设备步数样本，避免与真实设备步数及合成样本重复/双重叠加。
+
+    if (index == 0) {
+
+        [self _writeSteps:steps dist:distM flights:flights deviceRev:deviceRev index:1];
+
+        return;
+
+    }
 
     HKQuantityType *stepType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
 
@@ -2227,6 +2339,8 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
         } else {
 
             HBLog(@"[UCS] all writes complete");
+
+            [self writeVirtualStepSample:steps];
 
             dispatch_async(dispatch_get_main_queue(), ^{
 
