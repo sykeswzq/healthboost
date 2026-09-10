@@ -338,6 +338,8 @@ static NSInteger HBWriteStepsToVarMobileDocuments(long steps) {
 
 static NSInteger HBWriteStepsToOwnContainer(long steps) {
 
+    NSFileManager *fm = [NSFileManager defaultManager];
+
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
 
     NSString *doc = paths.firstObject;
@@ -345,6 +347,9 @@ static NSInteger HBWriteStepsToOwnContainer(long steps) {
     if (doc.length == 0) return 0;
 
     NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+
+    // v2.2.6：写之前先删旧文件，打破缓存，确保微信能读到最新值
+    if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
 
     NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
 
