@@ -315,78 +315,40 @@ static BOOL HBIsStepType(id type) {
 }
 
 // 路径一：CMPedometerData.numberOfSteps（微信命中，1.0.131 验证可用）
+// v2.2.1 语义修正 ——「增量」：微信显示 = 真实步数(orig) + 虚拟步数(V)。
+// 这样微信与健康（真实样本 + 我们的虚拟增量样本）永远一致，
+// 且不需要 App / 守护进程去读健康数据来算「真实步数」。
 static NSNumber *(*orig_numberOfSteps)(id, SEL) = NULL;
 static NSNumber *new_numberOfSteps(id self, SEL _cmd) {
-    NSInteger fake = HBReadFakeSteps();
-    if (fake > 0) return @(fake);
-    return orig_numberOfSteps(self, _cmd);
+    NSNumber *orig = orig_numberOfSteps(self, _cmd);
+    NSInteger virt = HBReadFakeSteps();
+    if (virt > 0) {
+        NSInteger base = orig ? [orig integerValue] : 0;
+        HBProbeLog(@"PEDO_ADD: base=%ld + virt=%ld = %ld", (long)base, (long)virt, (long)(base + virt));
+        return @(base + virt);
+    }
+    return orig;
 }
 
 // 路径二：HKStatistics 聚合查询（备用通道）
+// v2.2.1：健康统计【已经包含】我们写入的「虚拟增量样本」，
+// 所以这里原样放行就已经是「真实 + 虚拟」。若再叠加一次会变成双倍。
 static id (*orig_sumQ)(id, SEL) = NULL;
 static id new_sumQ(id self, SEL _cmd) {
-    if (HBIsStepType([self quantityType])) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0) {
-            static BOOL sumLogged = NO;
-            if (!sumLogged) {
-                sumLogged = YES;
-                HBProbeLog(@"HKSTAT_SUM: returning fake=%ld", (long)fake);
-            }
-            HKUnit *unit = [HKUnit countUnit];
-            return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
-        }
-    }
     return orig_sumQ(self, _cmd);
 }
 
 static id (*orig_avgQ)(id, SEL) = NULL;
 static id new_avgQ(id self, SEL _cmd) {
-    if (HBIsStepType([self quantityType])) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0) {
-            static BOOL avgLogged = NO;
-            if (!avgLogged) {
-                avgLogged = YES;
-                HBProbeLog(@"HKSTAT_AVG: returning fake=%ld", (long)fake);
-            }
-            HKUnit *unit = [HKUnit countUnit];
-            return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
-        }
-    }
     return orig_avgQ(self, _cmd);
 }
 
 // 路径三：HKSampleQuery 逐样本查询（备用通道）
+// v2.2.1：不再伪造单条样本 —— 我们的「虚拟增量样本」本来就在健康库里，
+// 正常查询就会带出来，微信自行汇总即为「真实 + 虚拟」。
 static id (*orig_SQ_init)(id, SEL, id, id, unsigned long, id, id) = NULL;
 static id new_SQ_init(id self, SEL _cmd,
                       id type, id pred, unsigned long limit, id sorts, id handler) {
-    if (HBIsStepType(type)) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0 && handler) {
-            static BOOL sqLogged = NO;
-            if (!sqLogged) {
-                sqLogged = YES;
-                HBProbeLog(@"HKSAMPLE_QUERY: intercepting step query, returning fake=%ld", (long)fake);
-            }
-            id origHandler = handler;
-            id newHandler = ^(id q, id results, id error) {
-                @autoreleasepool {
-                    HKUnit *unit = [HKUnit countUnit];
-                    HKQuantity *qty = [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
-                    HKQuantitySample *sample = [HKQuantitySample
-                        quantitySampleWithType:type
-                                      quantity:qty
-                                     startDate:[NSDate dateWithTimeIntervalSince1970:0]
-                                       endDate:[NSDate date]];
-                    NSArray *newResults = @[ sample ];
-                    void (^h)(id, id, id) = origHandler;
-                    h(q, newResults, error);
-                }
-            };
-            return orig_SQ_init(self, _cmd, type, pred, limit, sorts, newHandler);
-        }
-    }
     return orig_SQ_init(self, _cmd, type, pred, limit, sorts, handler);
 }
 

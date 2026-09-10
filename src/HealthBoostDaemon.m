@@ -1,12 +1,16 @@
 // HealthBoost - 锁屏后台守护进程（roothide deb）
-// 作用：在 iPhone 锁屏/睡眠状态下，按用户设定时间每日自动写入「真实+虚拟」步数。
+// 作用：在 iPhone 锁屏/睡眠状态下，按用户设定时间每日自动写入虚拟步数。
 //
-// 设计要点（与 App 的 HealthBoostApp.m 保持一致，杜绝重复叠加）：
-//   1) 只写【虚拟增量】样本：用 HBMakeDeviceSample 注入设备源 + HBSyntheticStepMetaKey 标记，
-//      每次生成先删掉带标记的合成样本，再写一个，绝不碰真实步数。
-//   2) 健康显示 = 真实步数 + 虚拟增量（healthd 自动把我们的设备源样本累加进当日总和）。
-//   3) 微信显示：把「真实+虚拟」的目标值写进微信容器/共享文件，tweak 原样返回。
-//   4) StartCalendarInterval 每 15 分钟唤起一次，内部判断是否已到计划时间且今日未生成，
+// v2.2.1 设计要点（与 App 的 HealthBoostApp.m 一致，杜绝重复计数）：
+//   1) 只写【虚拟增量 V】样本：HBMakeDeviceSample 注入设备源 + HBSyntheticStepMetaKey 标记；
+//      每次生成先尽力删掉我们自己的旧样本，再写一条，绝不碰真实步数。
+//   2) 健康显示 = 真实步数 + V（healthd 自动把我们的样本累加进当日总和）。
+//   3) 微信显示：文件里写的就是 V，微信端由 tweak 做「真实 + V」的加法
+//      → 微信与健康恒为 真实 + V，且不需要任何一方去读健康数据。
+//      （守护进程由 launchd 拉起，读不到健康库，所以这里绝不能依赖读取。）
+//   4) 与 App 共用 /var/mobile/Media/HealthBoost/lastgen.txt：谁先生成就写当天，
+//      另一个看到已是今天就不重复写，避免健康里出现两条虚拟增量样本。
+//   5) StartCalendarInterval 每 15 分钟唤起一次，内部判断是否已到计划时间且今日未生成，
 //      因此即使锁屏也照常每日自动生成。
 
 #import <Foundation/Foundation.h>
@@ -102,34 +106,7 @@ static void HBWriteStepsToVarMobileDocuments(long steps) {
     if (ok) [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
 }
 
-// 读真实步数（排除我们自己写的合成样本）
-static long HBQueryRealTodaySteps(HKHealthStore *store) {
-    __block long real = 0;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
-    NSDate *now = [NSDate date];
-    NSDate *startOfDay = [[NSCalendar currentCalendar] startOfDayForDate:now];
-    NSPredicate *pred = [HKQuery predicateForSamplesWithStartDate:startOfDay endDate:now options:HKQueryOptionNone];
-    HKSampleQuery *q = [[HKSampleQuery alloc] initWithSampleType:stepType
-                                                      predicate:pred
-                                                          limit:HKObjectQueryNoLimit
-                                                sortDescriptors:nil
-                                                 resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
-        for (HKSample *s in (results ?: @[])) {
-            if (![s isKindOfClass:[HKQuantitySample class]]) continue;
-            NSDictionary *md = ((HKQuantitySample *)s).metadata;
-            if (md && [md[HBSyntheticStepMetaKey] boolValue]) continue;
-            double v = [((HKQuantitySample *)s).quantity doubleValueForUnit:[HKUnit countUnit]];
-            real += (long)(v + 0.5);
-        }
-        dispatch_semaphore_signal(sem);
-    }];
-    [store executeQuery:q];
-    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
-    return real;
-}
-
-// 删除今天所有带标记的合成样本（步数/距离/楼层），只动我们自己的，保留真实数据
+// 删除今天所有属于我们的合成样本（步数/距离/楼层），只动我们自己的，保留真实数据
 static void HBDeleteSyntheticSamples(HKHealthStore *store) {
     NSDate *now = [NSDate date];
     NSDate *startOfDay = [[NSCalendar currentCalendar] startOfDayForDate:now];
@@ -148,7 +125,11 @@ static void HBDeleteSyntheticSamples(HKHealthStore *store) {
             for (HKSample *s in (results ?: @[])) {
                 if (![s isKindOfClass:[HKQuantitySample class]]) continue;
                 NSDictionary *md = ((HKQuantitySample *)s).metadata;
-                if (md && [md[HBSyntheticStepMetaKey] boolValue]) [toDelete addObject:s];
+                BOOL tagged = (md && [md[HBSyntheticStepMetaKey] boolValue]);
+                NSString *bid = s.sourceRevision.source.bundleIdentifier ?: @"";
+                BOOL mine = ([bid rangeOfString:@"sykes"].location != NSNotFound) ||
+                            ([bid rangeOfString:@"healthboost"].location != NSNotFound);
+                if (tagged || mine) [toDelete addObject:s];
             }
             dispatch_semaphore_signal(sem);
         }];
@@ -240,19 +221,20 @@ int main(int argc, const char * argv[]) {
         for (int i = 0; i < 100 && !authDone; i++) [NSThread sleepForTimeInterval:0.1];
         if (!authOK) { HBLog(@"未授权（请先在 App 内点一次「生成」授权），退出"); return 0; }
 
-        // 真实步数 -> 目标值
-        long realToday = HBQueryRealTodaySteps(store);
-        long target = realToday + virtual;
-        HBLog(@"真实步数=%ld, 目标(真实+虚拟)=%ld", realToday, target);
+        // v2.2.1：文件里只写「虚拟步数 V」。微信端由 tweak 做 真实 + V 的加法，
+        // 所以守护进程【不再】尝试读取健康数据（launchd 起来的进程读不到，之前恒为 0，
+        // 写出的"目标值"其实是纯 V，反而和健康对不上）。
+        long target = virtual;
+        HBLog(@"写入虚拟步数 V=%ld（微信显示 = 真实 + %ld）", target, target);
 
-        // 健康：删旧合成 + 写新合成增量（真实步数不动）
+        // 健康：尽力删掉我们自己的旧样本（读不到时会删 0 条，由 lastgen 兜底避免当天重复写）
         HBDeleteSyntheticSamples(store);
         NSDate *when = [NSDate date];
         HBWriteOneSample(store, [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount], (double)virtual, when);
         HBWriteOneSample(store, [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning], distance, when);
         HBWriteOneSample(store, [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed], (double)flights, when);
 
-        // 微信：写目标值（真实+虚拟），tweak 原样返回
+        // 微信：写虚拟步数 V（tweak 会在此基础上加真实步数）
         HBWriteStepsToWeChatContainers(target);
         HBWriteStepsToVarMobileDocuments(target);
         HBWriteStepsFile(target);
@@ -262,7 +244,7 @@ int main(int argc, const char * argv[]) {
         CFPreferencesSetValue(CFSTR("stepsDate"), (__bridge CFStringRef)[todayStr substringFromIndex:5],
                               CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
         CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
-        HBLog(@"微信步数文件已写为目标值 %ld", target);
+        HBLog(@"微信步数文件已写为虚拟步数 %ld", target);
 
         // 记录今日已生成
         [today writeToFile:LASTGEN_PATH atomically:YES encoding:NSUTF8StringEncoding error:nil];

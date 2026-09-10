@@ -303,6 +303,20 @@ static void HBWriteDaemonConfig(void) {
     HBLog(@"[UCS] 写入守护进程配置 %@ (ok=%d) enabled=%d steps=%ld", path, ok, (enabled&&scheduleOn), steps);
 }
 
+// 记录「今天已经生成过」。App 与守护进程共用同一个文件：
+// 谁先生成就写当天日期，另一个看到已是今天就不再重复写入，避免健康里出现两条虚拟增量样本。
+static void HBMarkGeneratedToday(void) {
+    NSDateFormatter *f = [[NSDateFormatter alloc] init];
+    f.dateFormat = @"yyyy-MM-dd";
+    NSString *today = [f stringFromDate:[NSDate date]];
+    NSString *dir = @"/var/mobile/Media/HealthBoost";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:dir]) [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *path = [dir stringByAppendingPathComponent:@"lastgen.txt"];
+    [today writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    HBLog(@"[UCS] 标记今日已生成 %@", today);
+}
+
 // 扫描所有数据容器，收集 tweak 写下的诊断日志。
 // tweak 跑在微信沙盒里，写不了 /var/mobile/Media/，只能写自己容器的 Documents。
 // 本 App 无沙盒，可以遍历所有容器把它读回来。
@@ -645,8 +659,8 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
     if (ip.section == 0) {
         if (ip.row == 0) {
             cell.imageView.image = [UIImage systemImageNamed:@"figure.walk"];
-            cell.textLabel.text = @"步数";
-            cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld 步", self.steps];
+            cell.textLabel.text = @"虚拟步数";
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"+%ld 步", self.steps];
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         } else if (ip.row == 1) {
             cell.imageView.image = [UIImage systemImageNamed:@"ruler"];
@@ -689,14 +703,13 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
     if (ip.section == 0 && ip.row == 0) {
-        [self editIntegerWithTitle:@"步数" message:@"设置每日目标步数" current:self.steps handler:^(long v){
+        [self editIntegerWithTitle:@"虚拟步数" message:@"要叠加的虚拟步数。健康/微信显示 = 真实步数 + 该值" current:self.steps handler:^(long v){
             self.steps = v;
             [self saveSettings];
-            // v1.0.202 修复「昨天 1000 今天仍 1000」的根因：旧版改设置只存了偏好、
-            // 不写步数文件，文件里一直留着上次生成的旧值。现在保存即写入所有通道，
-            // 微信立刻读到新目标（微信下次查询就生效，无需等每日生成）。
+            // v2.2.1：这里写入的就是「虚拟增量 V」。微信端由 tweak 做 真实 + V 的加法，
+            // 所以保存后微信立刻按 真实 + V 显示，无需等每日生成。
             HBWriteStepsPreference(v);
-            [self updateStatus:[NSString stringWithFormat:@"已生效：目标步数 %ld（微信下次刷新可见）", v]];
+            [self updateStatus:[NSString stringWithFormat:@"已生效：虚拟步数 %ld（微信/健康 = 真实 + %ld）", v, v]];
             [self.tableView reloadData];
         }];
     } else if (ip.section == 0 && ip.row == 2) {
@@ -878,7 +891,8 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
     HKQuantityType *distType   = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning];
     HKQuantityType *flightType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
     NSSet *shareTypes = [NSSet setWithObjects:stepType, distType, flightType, nil];
-    [self.healthStore requestAuthorizationToShareTypes:shareTypes readTypes:nil completion:^(BOOL success, NSError *error) {
+    // v2.2.1：读写权限都要（readTypes 之前是 nil，导致「读真实步数」永远得 0）。
+    [self.healthStore requestAuthorizationToShareTypes:shareTypes readTypes:shareTypes completion:^(BOOL success, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!success) {
                 self.busy = NO;
@@ -887,17 +901,21 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
                 return;
             }
             [self updateStatus:@"正在写入健康数据..."];
-            // 先算真实步数（排除虚拟增量），用于微信步数文件；健康侧只写虚拟增量样本
+            // v2.2.1：文件里只写「虚拟步数 V」——微信端由 tweak 负责 真实 + V 的加法，
+            // 健康端只写一条增量样本（真实样本保留）→ 两端都恒等于 真实 + 虚拟。
+            // 这样 App / 守护进程都【不需要】去读健康数据来算真实步数（守护进程读不到）。
+            HBWriteStepsPreference(virtual);
+            HBMarkGeneratedToday();
+            // 仅用于日志诊断：确认读权限已生效，并记录「真实 + 虚拟」的预期值
             HBQueryRealTodaySteps(self.healthStore, ^(long realToday) {
-                long target = realToday + virtual;   // 微信显示 真实 + 虚拟
-                HBWriteStepsPreference(target);
-                [self fetchDeviceSourceRevision:^(HKSourceRevision *devRev) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        // 健康：删除旧虚拟增量样本 + 写一个新的虚拟增量样本（绝不删真实步数）
-                        [self writeSamplesSequentially:devRev virtual:virtual distanceM:distanceMeters flights:flights];
-                    });
-                }];
+                HBLog(@"[UCS] 诊断：当前真实步数 = %ld，健康/微信应显示 = %ld", realToday, realToday + virtual);
             });
+            [self fetchDeviceSourceRevision:^(HKSourceRevision *devRev) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    // 健康：删除我们自己的旧样本 + 写一条新的虚拟增量样本（绝不删真实步数）
+                    [self writeSamplesSequentially:devRev virtual:virtual distanceM:distanceMeters flights:flights];
+                });
+            }];
         });
     }];
 }
@@ -963,7 +981,14 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
             for (HKSample *s in (results ?: @[])) {
                 if (![s isKindOfClass:[HKQuantitySample class]]) continue;
                 NSDictionary *md = ((HKQuantitySample *)s).metadata;
-                if (md && [md[HBSyntheticStepMetaKey] boolValue]) [synthetic addObject:s];
+                BOOL tagged = (md && [md[HBSyntheticStepMetaKey] boolValue]);
+                // v2.2.1：除标记外，再按「来源 = 我们自己」识别。
+                // 历史版本写下的样本可能没带标记（来源是 com.sykes.healthboost.app），
+                // 只按标记删会漏掉它们 → 旧样本残留并与新样本叠加，健康就会多出一截。
+                NSString *bid = s.sourceRevision.source.bundleIdentifier ?: @"";
+                BOOL mine = ([bid rangeOfString:@"sykes"].location != NSNotFound) ||
+                            ([bid rangeOfString:@"healthboost"].location != NSNotFound);
+                if (tagged || mine) [synthetic addObject:s];
             }
             dispatch_group_leave(group);
         }];
