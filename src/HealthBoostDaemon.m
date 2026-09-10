@@ -186,14 +186,6 @@ int main(int argc, const char * argv[]) {
         NSInteger cfgHour = [config[@"hour"] integerValue]; if (cfgHour < 0 || cfgHour > 23) cfgHour = 9;
         NSInteger cfgMinute = [config[@"minute"] integerValue]; if (cfgMinute < 0 || cfgMinute > 59) cfgMinute = 0;
 
-        // 今日是否已生成
-        NSString *today = HBTodayString();
-        NSString *lastgen = [NSString stringWithContentsOfFile:LASTGEN_PATH encoding:NSUTF8StringEncoding error:nil];
-        if (lastgen && [lastgen isEqualToString:today]) {
-            HBLog(@"今日(%@)已生成，跳过", today);
-            return 0;
-        }
-
         // 是否到达计划时间窗口（前后 15 分钟容差，兼容任意分钟，含 45 分以后）
         NSCalendar *cal = [NSCalendar currentCalendar];
         NSDateComponents *nowc = [cal components:NSCalendarUnitHour|NSCalendarUnitMinute fromDate:[NSDate date]];
@@ -207,6 +199,15 @@ int main(int argc, const char * argv[]) {
                   (long)nowc.hour, (long)nowc.minute, (long)cfgHour, (long)cfgMinute, (long)forwardDiff);
             return 0;
         }
+
+        // 今日是否已生成（必须在时间窗口检查之后，否则改计划时间后无法当天重新生成）
+        NSString *today = HBTodayString();
+        NSString *lastgen = [NSString stringWithContentsOfFile:LASTGEN_PATH encoding:NSUTF8StringEncoding error:nil];
+        if (lastgen && [lastgen isEqualToString:today]) {
+            HBLog(@"今日(%@)已生成，跳过", today);
+            return 0;
+        }
+
         HBLog(@"到达计划时间窗口，开始生成（虚拟=%ld, 距离=%.0f, 楼层=%ld）", virtual, distance, flights);
 
         // 健康授权
