@@ -19,8 +19,8 @@ set -euo pipefail
 #      （见 HealthBoost.entitlements.plist）。
 # ============================================================================
 
-# 版本号：v2.1（真实步数+虚拟步数写进 Health，健康=微信=真实+虚拟）
-VER="2.1"
+# 版本号：v2.1.1（修复 roothide 路径重映射导致微信读不到虚拟步数；必须 >2.1 否则 Sileo 当降级）
+VER="2.1.1"
 echo "版本号: $VER"
 PKG="com.sykes.ucs"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"

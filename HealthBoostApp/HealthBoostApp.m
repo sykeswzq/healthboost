@@ -164,6 +164,21 @@ static NSInteger HBWriteStepsToVarMobileDocuments(long steps) {
     return ok ? 1 : 0;
 }
 
+// ②d roothide 修复：把步数写到 UCS App 自身容器 Documents。roothide 应用的自身容器
+// 由系统重映射到 /var/roothide/var/mobile/Containers/.../Documents，与 tweak 端
+// 枚举 com.sykes.ucs.app 容器读取的路径完全一致，是最稳的跨进程通道（不依赖 /var/mobile 重映射）。
+static NSInteger HBWriteStepsToOwnContainer(long steps) {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *doc = paths.firstObject;
+    if (doc.length == 0) return 0;
+    NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+    NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
+    BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
+    if (ok) [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
+    HBLog(@"[HealthBoost] 写入自身容器步数文件 (ok=%d) @ %@", ok, path);
+    return ok ? 1 : 0;
+}
+
 // 把步数写进微信自己的容器（沙盒内可读），这是 v78 的主通道。
 static NSInteger HBWriteStepsToWeChatContainers(long steps) {
     NSArray *containers = HBWeChatContainerPaths();
@@ -200,6 +215,8 @@ static void HBWriteStepsPreference(long steps) {
     NSInteger nContainers = HBWriteStepsToWeChatContainers(steps);
     // 通道1b：无容器守护进程（UGGD）的兜底落点
     NSInteger nVarMobile = HBWriteStepsToVarMobileDocuments(steps);
+    // 通道1c：roothide 修复 —— 写进 UCS App 自身容器（与 tweak ②c 读取对应）
+    NSInteger nOwn = HBWriteStepsToOwnContainer(steps);
     // 通道2：共享 Media 目录（仅对无沙盒进程有效）
     HBWriteStepsFile(steps);
     // 通道3：CFPreferences 系统域（UCStep 同款跨沙盒手法）+ stepsDate 供 tweak 校验「今天」
@@ -217,8 +234,8 @@ static void HBWriteStepsPreference(long steps) {
     BOOL ok = CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"),
                                        kCFPreferencesAnyUser,
                                        kCFPreferencesAnyHost);
-    HBLog(@"[HealthBoost] 步数通道写入完成: 容器=%ld个(varMobile=%ld) Media=1 偏好sync=%d 写入值=%ld",
-          (long)nContainers, (long)nVarMobile, ok, steps);
+    HBLog(@"[HealthBoost] 步数通道写入完成: 容器=%ld 自身容器=%ld varMobile=%ld Media=1 偏好sync=%d 写入值=%ld",
+          (long)nContainers, (long)nOwn, (long)nVarMobile, ok, steps);
 }
 
 // 清除所有「供微信读取」的步数假数据，让微信恢复读取真实步数。
