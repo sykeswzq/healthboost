@@ -92,6 +92,8 @@ static void HBWriteStepsFile(long steps) {
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:dir]) [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     NSString *path = [dir stringByAppendingPathComponent:@"hb_steps.txt"];
+    // v2.2.3：写之前先删旧文件，强制打破任何进程的文件句柄缓存
+    if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
     NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
     [content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
@@ -101,6 +103,8 @@ static void HBWriteStepsToVarMobileDocuments(long steps) {
     NSString *doc = @"/var/mobile/Documents";
     if (![fm fileExistsAtPath:doc]) [fm createDirectoryAtPath:doc withIntermediateDirectories:YES attributes:nil error:nil];
     NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+    // v2.2.3：写之前先删旧文件，强制打破任何进程的文件句柄缓存
+    if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
     NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
     BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
     if (ok) [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
