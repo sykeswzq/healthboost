@@ -1,207 +1,272 @@
-// HealthBoost - 后台守护进程（roothide 范式）
-// 作用：锁屏/后台也能「每日自动生成」运动数据。
-//   · 由 LaunchDaemon (StartCalendarInterval) 定时唤起，无视锁屏状态。
-//   · 读 App 写入的共享配置 /var/mobile/Media/HealthBoost/config.plist
-//     （roothide 下 App 与守护进程看到的是同一个重映射视图）。
-//   · 写【设备源增量】样本（真实步数 + 虚拟增量），而不是绝对值覆盖，
-//     与健康 App 中“真实+虚拟”的语义一致（V2.0 验证过的设备源写法）。
-//   · 每次先删掉当天自己写的“合成”样本再写新的，幂等，不会逐次累加。
+// HealthBoost - 锁屏后台守护进程（roothide deb）
+// 作用：在 iPhone 锁屏/睡眠状态下，按用户设定时间每日自动写入「真实+虚拟」步数。
 //
-// 编译：build.sh 用 ldid -M -SHealthBoost.entitlements.plist 签名（含 healthkit 私有权限）。
+// 设计要点（与 App 的 HealthBoostApp.m 保持一致，杜绝重复叠加）：
+//   1) 只写【虚拟增量】样本：用 HBMakeDeviceSample 注入设备源 + HBSyntheticStepMetaKey 标记，
+//      每次生成先删掉带标记的合成样本，再写一个，绝不碰真实步数。
+//   2) 健康显示 = 真实步数 + 虚拟增量（healthd 自动把我们的设备源样本累加进当日总和）。
+//   3) 微信显示：把「真实+虚拟」的目标值写进微信容器/共享文件，tweak 原样返回。
+//   4) StartCalendarInterval 每 15 分钟唤起一次，内部判断是否已到计划时间且今日未生成，
+//      因此即使锁屏也照常每日自动生成。
 
 #import <Foundation/Foundation.h>
 #import <HealthKit/HealthKit.h>
+#include <stdarg.h>
 
-#define CONFIG_PATH @"/var/mobile/Media/HealthBoost/config.plist"
+#define HBSyntheticStepMetaKey @"com.sykes.ucs.virtualStep"
+#define CONFIG_PATH  @"/var/mobile/Media/HealthBoost/config.plist"
 #define LOG_PATH    @"/var/mobile/Media/HealthBoost/daemon.log"
-#define SYNTH_KEY   @"com.sykes.ucs.virtualStep"
+#define LASTGEN_PATH @"/var/mobile/Media/HealthBoost/lastgen.txt"
 
 static void HBLog(NSString *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
-    va_end(args);
-    NSLog(@"[HealthBoostDaemon] %@", msg);
-
+    va_list ap; va_start(ap, fmt);
+    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], msg];
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *dir = [LOG_PATH stringByDeletingLastPathComponent];
-    if (![fm fileExistsAtPath:dir]) {
-        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    }
-    NSString *line = [NSString stringWithFormat:@"%@  %@\n", [[NSDate date] description], msg];
+    if (![fm fileExistsAtPath:dir]) [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:LOG_PATH];
-    if (fh) {
-        [fh seekToEndOfFile];
-        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh closeFile];
-    } else {
-        [line writeToFile:LOG_PATH atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    }
+    if (fh) { [fh seekToEndOfFile]; [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile]; }
+    NSLog(@"[HealthBoostDaemon] %@", msg);
 }
 
-// 构造设备源样本：注入 _sourceRevision 让 healthd 当作 iPhone 设备数据，可靠叠加。
-static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
-                                            HKQuantity *qty,
-                                            NSDate *start,
-                                            NSDate *end,
-                                            HKSourceRevision *devRev) {
+// 与 App 端完全一致的「设备源样本」构造：注入 _sourceRevision，让 healthd 当作 iPhone 设备数据。
+static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type, HKQuantity *quantity, NSDate *start, NSDate *end) {
     HKDevice *device = [HKDevice localDevice];
-    HKQuantitySample *s = [HKQuantitySample quantitySampleWithType:type
-                                                          quantity:qty
-                                                       startDate:start
-                                                         endDate:end
-                                                           device:device
-                                                       metadata:@{SYNTH_KEY: @YES}];
-    if (!s) return nil;
-    if (devRev) {
-        @try {
-            [s setValue:[devRev copy] forKey:@"_sourceRevision"];
-        } @catch (NSException *e) {
-            (void)e;
+    HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:type
+                                                              quantity:quantity
+                                                           startDate:start
+                                                             endDate:end
+                                                               device:device
+                                                           metadata:@{ HBSyntheticStepMetaKey : @YES }];
+    return sample;
+}
+
+// ---- 微信步数文件通道（与 App 的 HBWriteStepsPreference 同款） ----
+static NSString *HBFakeDateLine(void) {
+    NSDateFormatter *f = [[NSDateFormatter alloc] init];
+    f.dateFormat = @"yyyy-MM-dd";
+    return [NSString stringWithFormat:@"date:%@", [f stringFromDate:[NSDate date]]];
+}
+
+static NSArray<NSString *> *HBWeChatContainerPaths(void) {
+    NSString *base = @"/var/mobile/Containers/Data/Application";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *dirs = [fm contentsOfDirectoryAtPath:base error:nil];
+    if (!dirs) return @[];
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *d in dirs) {
+        NSString *meta = [base stringByAppendingFormat:@"/%@/.com.apple.mobile_container_manager.metadata.plist", d];
+        NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:meta];
+        NSString *ident = dict[@"MCMMetadataIdentifier"];
+        if ([ident isEqualToString:@"com.tencent.xin"] ||
+            [ident isEqualToString:@"UGGD"] ||
+            [ident hasPrefix:@"com.tencent"]) {
+            [out addObject:[base stringByAppendingPathComponent:d]];
         }
     }
-    return s;
+    return out;
 }
 
-int main(int argc, const char *argv[]) {
+static void HBWriteStepsToWeChatContainers(long steps) {
+    NSArray *containers = HBWeChatContainerPaths();
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
+    for (NSString *c in containers) {
+        NSString *doc = [c stringByAppendingPathComponent:@"Documents"];
+        if (![fm fileExistsAtPath:doc]) [fm createDirectoryAtPath:doc withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+        if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
+        BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
+        if (ok) [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
+    }
+}
+
+static void HBWriteStepsFile(long steps) {
+    NSString *dir = @"/var/mobile/Media/HealthBoost";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:dir]) [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *path = [dir stringByAppendingPathComponent:@"hb_steps.txt"];
+    NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
+    [content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
+static void HBWriteStepsToVarMobileDocuments(long steps) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *doc = @"/var/mobile/Documents";
+    if (![fm fileExistsAtPath:doc]) [fm createDirectoryAtPath:doc withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
+    NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
+    BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
+    if (ok) [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
+}
+
+// 读真实步数（排除我们自己写的合成样本）
+static long HBQueryRealTodaySteps(HKHealthStore *store) {
+    __block long real = 0;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+    NSDate *now = [NSDate date];
+    NSDate *startOfDay = [[NSCalendar currentCalendar] startOfDayForDate:now];
+    NSPredicate *pred = [HKQuery predicateForSamplesWithStartDate:startOfDay endDate:now options:HKQueryOptionNone];
+    HKSampleQuery *q = [[HKSampleQuery alloc] initWithSampleType:stepType
+                                                      predicate:pred
+                                                          limit:HKObjectQueryNoLimit
+                                                sortDescriptors:nil
+                                                 resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
+        for (HKSample *s in (results ?: @[])) {
+            if (![s isKindOfClass:[HKQuantitySample class]]) continue;
+            NSDictionary *md = ((HKQuantitySample *)s).metadata;
+            if (md && [md[HBSyntheticStepMetaKey] boolValue]) continue;
+            double v = [((HKQuantitySample *)s).quantity doubleValueForUnit:[HKUnit countUnit]];
+            real += (long)(v + 0.5);
+        }
+        dispatch_semaphore_signal(sem);
+    }];
+    [store executeQuery:q];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+    return real;
+}
+
+// 删除今天所有带标记的合成样本（步数/距离/楼层），只动我们自己的，保留真实数据
+static void HBDeleteSyntheticSamples(HKHealthStore *store) {
+    NSDate *now = [NSDate date];
+    NSDate *startOfDay = [[NSCalendar currentCalendar] startOfDayForDate:now];
+    NSArray *types = @[[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount],
+                       [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning],
+                       [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed]];
+    NSMutableArray *toDelete = [NSMutableArray array];
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    for (HKQuantityType *t in types) {
+        NSPredicate *pred = [HKQuery predicateForSamplesWithStartDate:startOfDay endDate:now options:HKQueryOptionNone];
+        HKSampleQuery *q = [[HKSampleQuery alloc] initWithSampleType:t
+                                                          predicate:pred
+                                                              limit:HKObjectQueryNoLimit
+                                                    sortDescriptors:nil
+                                                     resultsHandler:^(HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
+            for (HKSample *s in (results ?: @[])) {
+                if (![s isKindOfClass:[HKQuantitySample class]]) continue;
+                NSDictionary *md = ((HKQuantitySample *)s).metadata;
+                if (md && [md[HBSyntheticStepMetaKey] boolValue]) [toDelete addObject:s];
+            }
+            dispatch_semaphore_signal(sem);
+        }];
+        [store executeQuery:q];
+        dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+    }
+    for (HKSample *s in toDelete) {
+        dispatch_semaphore_t dsem = dispatch_semaphore_create(0);
+        [store deleteObject:s withCompletion:^(BOOL ok, NSError *e) {
+            HBLog(@"删除虚拟增量 %@ ok=%d", s.sampleType.identifier, ok);
+            dispatch_semaphore_signal(dsem);
+        }];
+        dispatch_semaphore_wait(dsem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+    }
+    HBLog(@"已删除 %lu 条旧虚拟增量样本", (unsigned long)toDelete.count);
+}
+
+// 写一条合成增量样本（设备源）
+static void HBWriteOneSample(HKHealthStore *store, HKQuantityType *type, double value, NSDate *when) {
+    HKQuantity *q = [HKQuantity quantityWithUnit:[type isEqual:[HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning]] ? [HKUnit meterUnit] : [HKUnit countUnit] doubleValue:value];
+    HKQuantitySample *sample = HBMakeDeviceSample(type, q, when, when);
+    if (!sample) { HBLog(@"样本构造失败 %@", type.identifier); return; }
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [store saveObject:sample withCompletion:^(BOOL success, NSError *error) {
+        HBLog(@"写入 %@ = %.0f ok=%d %@", type.identifier, value, success, error ? error.localizedDescription : @"");
+        dispatch_semaphore_signal(sem);
+    }];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+}
+
+static NSString *HBTodayString(void) {
+    NSDateFormatter *f = [[NSDateFormatter alloc] init];
+    f.dateFormat = @"yyyy-MM-dd";
+    return [f stringFromDate:[NSDate date]];
+}
+
+int main(int argc, const char * argv[]) {
     @autoreleasepool {
+        HBLog(@"==== HealthBoost 守护进程启动 ====");
         NSFileManager *fm = [NSFileManager defaultManager];
 
-        // 读 App 写入的共享配置
-        NSDictionary *cfg = nil;
-        NSData *d = [fm contentsAtPath:CONFIG_PATH];
-        if (d) {
-            cfg = [NSPropertyListSerialization propertyListWithData:d options:0 format:nil error:nil];
-        }
-        if (!cfg) {
-            HBLog(@"无配置，退出");
-            return 0;
-        }
-        BOOL enabled = [cfg[@"enabled"] boolValue];
-        if (!enabled) {
-            HBLog(@"未启用（enabled=NO，通常是定时开关关闭），退出");
-            return 0;
-        }
-        long steps = [cfg[@"steps"] longValue];
-        double distance = [cfg[@"distance"] doubleValue];
-        long flights = [cfg[@"flights"] longValue];
-        NSInteger hour = [cfg[@"hour"] integerValue];
-        NSInteger minute = [cfg[@"minute"] integerValue];
-        if (steps <= 0) {
-            HBLog(@"steps<=0，退出");
+        // 读配置
+        NSDictionary *config = nil;
+        NSData *configData = [fm contentsAtPath:CONFIG_PATH];
+        if (configData) config = [NSPropertyListSerialization propertyListWithData:configData options:0 format:nil error:nil];
+        if (!config) { HBLog(@"无配置，退出"); return 0; }
+
+        BOOL enabled = [config[@"enabled"] boolValue];
+        if (!enabled) { HBLog(@"守护进程未启用，退出"); return 0; }
+
+        long virtual  = [config[@"steps"] longValue];    if (virtual <= 0) virtual = 1000;
+        double distance = [config[@"distance"] doubleValue]; if (distance <= 0) distance = virtual * 0.7;
+        long flights  = [config[@"flights"] longValue];   if (flights <= 0) flights = 5;
+        NSInteger cfgHour = [config[@"hour"] integerValue]; if (cfgHour < 0 || cfgHour > 23) cfgHour = 9;
+        NSInteger cfgMinute = [config[@"minute"] integerValue]; if (cfgMinute < 0 || cfgMinute > 59) cfgMinute = 0;
+
+        // 今日是否已生成
+        NSString *today = HBTodayString();
+        NSString *lastgen = [NSString stringWithContentsOfFile:LASTGEN_PATH encoding:NSUTF8StringEncoding error:nil];
+        if (lastgen && [lastgen isEqualToString:today]) {
+            HBLog(@"今日(%@)已生成，跳过", today);
             return 0;
         }
 
-        // 仅在到达计划时间后才生成（每天一次；幂等由“删旧合成样本”保证）
+        // 是否到达计划时间窗口（15 分钟容差，兼容任意分钟，含 45 分以后）
         NSCalendar *cal = [NSCalendar currentCalendar];
-        NSDate *now = [NSDate date];
-        NSDateComponents *hm = [cal components:(NSCalendarUnitHour | NSCalendarUnitMinute) fromDate:now];
-        NSInteger curH = [hm hour];
-        NSInteger curM = [hm minute];
-        if (curH < hour || (curH == hour && curM < minute)) {
-            HBLog(@"未到计划时间 (%02ld:%02ld < %02ld:%02ld)，跳过", (long)curH, (long)curM, (long)hour, (long)minute);
+        NSDateComponents *nowc = [cal components:NSCalendarUnitHour|NSCalendarUnitMinute fromDate:[NSDate date]];
+        NSInteger nowMin = nowc.hour * 60 + nowc.minute;
+        NSInteger cfgMin = cfgHour * 60 + cfgMinute;
+        NSInteger diff = (nowMin - cfgMin + 1440) % 1440;
+        if (diff > 15) {
+            HBLog(@"未到计划时间(%02ld:%02ld)，当前 %02ld:%02ld，距窗口 %ld 分，跳过",
+                  (long)cfgHour, (long)cfgMinute, (long)nowc.hour, (long)nowc.minute, (long)diff);
             return 0;
         }
+        HBLog(@"到达计划时间窗口，开始生成（虚拟=%ld, 距离=%.0f, 楼层=%ld）", virtual, distance, flights);
 
+        // 健康授权
         HKHealthStore *store = [[HKHealthStore alloc] init];
-        NSSet *types = [NSSet setWithObjects:
+        NSSet *shareTypes = [NSSet setWithObjects:
             [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount],
             [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning],
-            [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed],
-            nil];
-        // 尽力请求授权（ entitlements 含 healthkit 私有权限，设备源写入通常不受 app 级授权限制）
-        [store requestAuthorizationToShareTypes:types
-                                       readTypes:types
-                                      completion:^(BOOL ok, NSError *e) {
-            HBLog(@"授权回调 ok=%d %@", ok, e ? e.localizedDescription : @"");
+            [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed], nil];
+        __block BOOL authDone = NO, authOK = NO;
+        [store requestAuthorizationToShareTypes:shareTypes readTypes:nil completion:^(BOOL success, NSError *error) {
+            authOK = success; authDone = YES;
+            if (!success) HBLog(@"健康授权失败: %@", error.localizedDescription);
         }];
+        for (int i = 0; i < 100 && !authDone; i++) [NSThread sleepForTimeInterval:0.1];
+        if (!authOK) { HBLog(@"未授权（请先在 App 内点一次「生成」授权），退出"); return 0; }
 
-        HKQuantityType *stepType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+        // 真实步数 -> 目标值
+        long realToday = HBQueryRealTodaySteps(store);
+        long target = realToday + virtual;
+        HBLog(@"真实步数=%ld, 目标(真实+虚拟)=%ld", realToday, target);
 
-        // 取一个“设备源” HKSourceRevision（bid=nil 或 com.apple.health.*）
-        __block HKSourceRevision *devRev = nil;
-        NSDateComponents *back = [[NSDateComponents alloc] init];
-        back.day = -7;
-        NSDate *start7 = [cal dateByAddingComponents:back toDate:now options:0];
-        NSPredicate *pred7 = [HKQuery predicateForSamplesWithStartDate:start7 endDate:now options:HKQueryOptionNone];
-        dispatch_semaphore_t semRev = dispatch_semaphore_create(0);
-        HKSampleQuery *qRev = [[HKSampleQuery alloc] initWithSampleType:stepType
-                                                              predicate:pred7
-                                                                  limit:200
-                                                        sortDescriptors:nil
-                                                         resultsHandler:^(HKSampleQuery *q, NSArray *res, NSError *err) {
-            if (err) HBLog(@"取设备源rev错误: %@", err);
-            for (HKSample *s in res ?: @[]) {
-                HKSourceRevision *r = s.sourceRevision;
-                if (!r) continue;
-                NSString *bid = r.source.bundleIdentifier;
-                if (bid == nil || [bid hasPrefix:@"com.apple.health."]) { devRev = r; break; }
-            }
-            HBLog(@"设备源rev=%@", devRev ?: @"nil");
-            dispatch_semaphore_signal(semRev);
-        }];
-        [store executeQuery:qRev];
-        dispatch_semaphore_wait(semRev, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)));
+        // 健康：删旧合成 + 写新合成增量（真实步数不动）
+        HBDeleteSyntheticSamples(store);
+        NSDate *when = [NSDate date];
+        HBWriteOneSample(store, [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount], (double)virtual, when);
+        HBWriteOneSample(store, [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning], distance, when);
+        HBWriteOneSample(store, [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed], (double)flights, when);
 
-        NSDate *startOfDay = [cal startOfDayForDate:now];
+        // 微信：写目标值（真实+虚拟），tweak 原样返回
+        HBWriteStepsToWeChatContainers(target);
+        HBWriteStepsToVarMobileDocuments(target);
+        HBWriteStepsFile(target);
+        NSString *todayStr = HBFakeDateLine();
+        CFPreferencesSetValue(CFSTR("steps"), (__bridge CFNumberRef)@(target),
+                              CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+        CFPreferencesSetValue(CFSTR("stepsDate"), (__bridge CFStringRef)[todayStr substringFromIndex:5],
+                              CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+        CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+        HBLog(@"微信步数文件已写为目标值 %ld", target);
 
-        // 1) 删掉今天已有的“合成”样本（幂等，避免重复叠加）
-        NSPredicate *todayPred = [HKQuery predicateForSamplesWithStartDate:startOfDay
-                                                                   endDate:now
-                                                                   options:HKQueryOptionNone];
-        dispatch_semaphore_t semDel = dispatch_semaphore_create(0);
-        HKSampleQuery *qDel = [[HKSampleQuery alloc] initWithSampleType:stepType
-                                                              predicate:todayPred
-                                                                  limit:NSUIntegerMax
-                                                        sortDescriptors:nil
-                                                         resultsHandler:^(HKSampleQuery *q, NSArray *res, NSError *err) {
-            NSMutableArray *old = [NSMutableArray array];
-            for (HKSample *s in res ?: @[]) {
-                if ([s.metadata[SYNTH_KEY] boolValue]) [old addObject:s];
-            }
-            HBLog(@"待删除旧合成样本=%lu", (unsigned long)old.count);
-            if (old.count == 0) { dispatch_semaphore_signal(semDel); return; }
-            [store deleteObjects:old withCompletion:^(BOOL success, NSError *e2) {
-                HBLog(@"删除旧合成样本 ok=%d %@", success, e2 ? e2.localizedDescription : @"");
-                dispatch_semaphore_signal(semDel);
-            }];
-        }];
-        [store executeQuery:qDel];
-        dispatch_semaphore_wait(semDel, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)));
-
-        // 2) 写新的“合成增量”样本（设备源，叠加到真实步数之上）
-        NSMutableArray *samples = [NSMutableArray array];
-        [samples addObject:HBMakeDeviceSample(stepType,
-                                              [HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:(double)steps],
-                                              startOfDay, now, devRev)];
-        if (distance > 0) {
-            [samples addObject:HBMakeDeviceSample(
-                [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning],
-                [HKQuantity quantityWithUnit:[HKUnit meterUnit] doubleValue:distance],
-                startOfDay, now, devRev)];
-        }
-        if (flights > 0) {
-            [samples addObject:HBMakeDeviceSample(
-                [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed],
-                [HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:(double)flights],
-                startOfDay, now, devRev)];
-        }
-
-        dispatch_semaphore_t semSave = dispatch_semaphore_create(0);
-        __block BOOL allOk = YES;
-        __block NSUInteger done = 0;
-        for (HKQuantitySample *sm in samples) {
-            [store saveObject:sm withCompletion:^(BOOL success, NSError *e3) {
-                HBLog(@"写入样本 ok=%d %@", success, e3 ? e3.localizedDescription : @"");
-                if (!success) allOk = NO;
-                done++;
-                if (done >= samples.count) dispatch_semaphore_signal(semSave);
-            }];
-        }
-        if (samples.count == 0) dispatch_semaphore_signal(semSave);
-        dispatch_semaphore_wait(semSave, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)));
-
-        HBLog(@"完成：steps=%ld distance=%.1f flights=%ld allOk=%d", steps, distance, flights, allOk);
+        // 记录今日已生成
+        [today writeToFile:LASTGEN_PATH atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        HBLog(@"==== 生成完成 ====");
     }
     return 0;
 }

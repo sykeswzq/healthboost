@@ -21,7 +21,7 @@ set -euo pipefail
 
 # 版本号：v2.1.2（锁屏每日自动生成回归修复：重写守护进程为定时 LaunchDaemon，
 # 写设备源增量样本；并修复健康/微信叠加步数。必须 >2.1.1 否则 Sileo 当降级）
-VER="2.1.2"
+VER="2.2.0"
 echo "版本号: $VER"
 PKG="com.sykes.ucs"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
