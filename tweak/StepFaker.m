@@ -109,12 +109,13 @@ static BOOL HBFileIsToday(NSString *path) {
 static void HBParseStepsFile(NSString *path, NSInteger *outVal, BOOL *outFresh) {
     *outVal = 0; *outFresh = NO;
     if (!path) return;
-    // v2.2.3：强制重新读取文件，不使用系统缓存
+    // v2.2.3：读取前先删文件，强制打破任何进程的文件句柄缓存
     NSFileManager *fm = [NSFileManager defaultManager];
     if ([fm fileExistsAtPath:path]) {
-        NSError *err = nil;
-        [fm removeItemAtPath:path error:&err];
+        [fm removeItemAtPath:path error:nil];
+        HBProbeLog(@"PARSE_STEPS: 已删除旧文件 %@" , path);
     }
+    if (![fm fileExistsAtPath:path]) return;
     NSString *c = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
     if (c.length == 0) return;
     NSArray *lines = [c componentsSeparatedByString:@"\n"];
