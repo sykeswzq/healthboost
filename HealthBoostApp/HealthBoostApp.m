@@ -118,7 +118,9 @@ static void HBWriteStepsFile(long steps) {
     }
     NSString *path = [dir stringByAppendingPathComponent:@"hb_steps.txt"];
     NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
-    BOOL ok = [content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    // v2.2.3：写之前先删旧文件，强制打破任何进程的文件句柄缓存
+            if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
+            BOOL ok = [content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     HBLog(@"[HealthBoost] 已写入步数文件 %ld (file=%d) @ %@", steps, ok, path);
 }
 
