@@ -321,11 +321,17 @@ static BOOL HBIsStepType(id type) {
 // 新逻辑：显示 = 真实步数(orig) + 虚拟步数(增量)
 static NSNumber *(*orig_numberOfSteps)(id, SEL) = NULL;
 static NSNumber *new_numberOfSteps(id self, SEL _cmd) {
-    // 方案A：虚拟步数已由 App 写入 Health（合成样本=虚拟增量），微信读 Health 即得 真实+虚拟。
-    // tweak 此处直通，不再叠加，否则 微信 = 真实+虚拟+虚拟 双重加。
+    // 修复(V2.0.2)：CMPedometer/CoreMotion 的读数来自设备运动协处理器，【不读取】HealthKit 里
+    // App 写的合成步数样本。因此方案A的「App写Health、此处直通」对微信无效——微信走此通道只拿真实步数(常≈0)，
+    // 而健康App走HealthKit聚合通道(下方HKStatistics/HKSampleQuery保持直通)才能拿到 真实+虚拟。
+    // 故此处必须【叠加】虚拟增量，微信才显示 真实+虚拟；两条通道数值一致、互不累加。
     NSNumber *real = orig_numberOfSteps ? orig_numberOfSteps(self, _cmd) : nil;
     NSInteger virtual = HBReadVirtualSteps();
-    HBProbeLog(@"NUM_STEPS passthrough: real=%@ virtual=%ld（App已写入Health）", real, (long)virtual);
+    HBProbeLog(@"NUM_STEPS: real=%@ virtual=%ld -> 返回 real+virtual", real, (long)virtual);
+    if (virtual > 0 && real != nil) {
+        long total = (long)[real longValue] + (long)virtual;
+        return @(total);
+    }
     return real;
 }
 

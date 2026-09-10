@@ -980,26 +980,29 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
         HBLog(@"[UCS] samples to delete: %lu (of %lu)", (unsigned long)deviceSamples.count, (unsigned long)samples.count);
 
         __weak typeof(self) weakSelf = self;
-        if (deviceSamples.count > 0) {
+        // 修复(V2.0.2)：绝不删除真实设备/健康样本，仅清掉本 App 之前写的合成样本
+        // （HBSyntheticStepMetaKey 标记），避免真实步数被抹。原逻辑会 deleteObject 设备/健康源样本。
+        NSMutableArray *oldSynthetic = [NSMutableArray array];
+        for (HKSample *s in deviceSamples) {
+            if ([s.metadata[HBSyntheticStepMetaKey] boolValue]) [oldSynthetic addObject:s];
+        }
+        void (^startWrite)(void) = ^{
+            HBLog(@"[UCS] start writing: steps=%ld dist=%.1f flights=%ld", steps, distanceMeters, flights);
+            [weakSelf _writeSteps:steps dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
+        };
+        if (oldSynthetic.count > 0) {
             dispatch_group_t group = dispatch_group_create();
-            for (HKSample *s in deviceSamples) {
+            for (HKSample *s in oldSynthetic) {
                 dispatch_group_enter(group);
                 [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e) {
-                    HBLog(@"[UCS] delete %@: ok=%d err=%@", s.sampleType.identifier, ok, e ?: @"nil");
+                    HBLog(@"[UCS] delete synthetic %@: ok=%d", s.sampleType.identifier, ok);
                     dispatch_group_leave(group);
                 }];
             }
-            dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-                HBLog(@"[UCS] all deletes done (%lu 条)", (unsigned long)deviceSamples.count);
-                HBLog(@"[UCS] start writing: steps=%ld dist=%.1f flights=%ld", steps, distanceMeters, flights);
-                [weakSelf _writeSteps:steps dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
-            });
+            dispatch_group_notify(group, dispatch_get_main_queue(), startWrite);
         } else {
-            HBLog(@"[UCS] no device samples to delete");
-            dispatch_async(dispatch_get_main_queue(), ^{
-                HBLog(@"[UCS] start writing: steps=%ld dist=%.1f flights=%ld", steps, distanceMeters, flights);
-                [weakSelf _writeSteps:steps dist:distanceMeters flights:flights deviceRev:deviceRev index:0];
-            });
+            HBLog(@"[UCS] no synthetic samples to delete");
+            dispatch_async(dispatch_get_main_queue(), startWrite);
         }
     }];
     [self.healthStore executeQuery:query];
