@@ -30,7 +30,7 @@
 
 	<!-- ===== 应用标识 ===== -->
 	<key>application-identifier</key>
-	<string>com.sykes.healthboost.app</string>
+	<string>com.sykes.ucs.app</string>
 
 	<!-- ===== 调试用（roothide 下非必需，保留便于真机 attach） ===== -->
 	<key>get-task-allow</key>

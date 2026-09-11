@@ -343,26 +343,79 @@ static NSNumber *new_numberOfSteps(id self, SEL _cmd) {
 // 新逻辑：显示 = 真实聚合值(orig) + 虚拟步数(增量)
 static id (*orig_sumQ)(id, SEL) = NULL;
 static id new_sumQ(id self, SEL _cmd) {
-    // 方案A 直通：HKStatisticsQuery 聚合已含 App 写入的合成步数(虚拟增量)，直接返回原值。
     id result = orig_sumQ ? orig_sumQ(self, _cmd) : nil;
-    HBProbeLog(@"HKSTAT_SUM passthrough: 返回 Health 原值(含虚拟增量)");
+    // 立即加虚拟步数，避免延迟
+    if (result && [result isKindOfClass:[HKStatistics class]]) {
+        HKQuantity *q = [(HKStatistics *)result sumQuantity];
+        if (q) {
+            NSInteger v = HBReadVirtualSteps();
+            if (v > 0) {
+                double nv = [q doubleValueForUnit:[HKUnit countUnit]] + (double)v;
+                return [HKStatistics statisticsWithQuantityType:[(HKStatistics *)result quantityType]
+                                                   summatory:[HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:nv]
+                                                         average:nil
+                                                          count:1
+                                                       minimumQuantity:nil
+                                                        maximumQuantity:nil
+                                              deviceChangeSamples:@[]];
+            }
+        }
+    }
     return result;
 }
 
 static id (*orig_avgQ)(id, SEL) = NULL;
 static id new_avgQ(id self, SEL _cmd) {
-    // 方案A 直通：同上，直接返回 Health 原值。
     id result = orig_avgQ ? orig_avgQ(self, _cmd) : nil;
-    HBProbeLog(@"HKSTAT_AVG passthrough: 返回 Health 原值(含虚拟增量)");
+    // 立即加虚拟步数，避免延迟
+    if (result && [result isKindOfClass:[HKStatistics class]]) {
+        HKQuantity *q = [(HKStatistics *)result averageQuantity];
+        if (q) {
+            NSInteger v = HBReadVirtualSteps();
+            if (v > 0) {
+                double nv = [q doubleValueForUnit:[HKUnit countUnit]] + (double)v;
+                return [HKStatistics statisticsWithQuantityType:[(HKStatistics *)result quantityType]
+                                                   summatory:nil
+                                                         average:[HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:nv]
+                                                          count:1
+                                                       minimumQuantity:nil
+                                                        maximumQuantity:nil
+                                              deviceChangeSamples:@[]];
+            }
+        }
+    }
     return result;
 }
 
 // 路径三：HKSampleQuery 逐样本查询（备用通道）
-// 新逻辑：把返回的真实样本求和，再加上虚拟步数增量，用单个聚合样本替换返回。
+// 新逻辑：在 handler 回调中累加虚拟步数
 static id (*orig_SQ_init)(id, SEL, id, id, unsigned long, id, id) = NULL;
 static id new_SQ_init(id self, SEL _cmd,
                       id type, id pred, unsigned long limit, id sorts, id handler) {
-    // 方案A 直通：App 已把虚拟步数写进 Health，逐样本查询返回原结果即可，不再叠加。
+    if (handler && type && [type isKindOfClass:[HKSampleType class]]) {
+        NSString *tid = [(HKSampleType *)type identifier];
+        if ([tid isEqualToString:HKQuantityTypeIdentifierStepCount]) {
+            // 包装 handler，注入虚拟步数
+            id wrapped = ^(HKSample * _Nullable sample, HKSample * _Nullable latestSample, NSInteger totalCount, NSError * _Nullable error) {
+                @autoreleasepool {
+                    if (sample && [sample isKindOfClass:[HKQuantitySample class]]) {
+                        HKQuantitySample *qs = (HKQuantitySample *)sample;
+                        NSInteger v = HBReadVirtualSteps();
+                        if (v > 0) {
+                            double cur = [qs.quantity doubleValueForUnit:[HKUnit countUnit]];
+                            double nv = cur + (double)v;
+                            sample = [HKQuantitySample quantitySampleWithType:qs.quantityType
+                                                                       quantity:[HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:nv]
+                                                                     startDate:qs.startDate
+                                                                       endDate:qs.endDate];
+                        }
+                    }
+                    if (handler) handler(sample, latestSample, totalCount, error);
+                }
+            };
+            return orig_SQ_init(self, _cmd, type, pred, limit, sorts, wrapped);
+        }
+    }
     return orig_SQ_init(self, _cmd, type, pred, limit, sorts, handler);
 }
 
