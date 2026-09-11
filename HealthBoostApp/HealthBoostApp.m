@@ -969,7 +969,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
                                                object:nil];
 
-    [self performSelector:@selector(checkAndCatchUpGeneration) withObject:nil afterDelay:1.0];
+    // v2.2.9：移除 performSelector:afterDelay 自动触发生成，避免用户未点"生成"就产生步数
 
 
 
@@ -1625,6 +1625,12 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     [self presentViewController:alert animated:YES completion:nil];
 
+}
+
+
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 
