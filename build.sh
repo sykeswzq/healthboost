@@ -20,7 +20,7 @@ set -euo pipefail
 # ============================================================================
 
 # 版本号：v2.1.1（修复 roothide 路径重映射导致微信读不到虚拟步数；必须 >2.1 否则 Sileo 当降级）
-VER="2.2.10"
+VER="2.2.11"
 echo "版本号: $VER"
 PKG="com.sykes.ucs"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
