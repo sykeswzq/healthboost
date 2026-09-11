@@ -2228,25 +2228,24 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
             // v2.2.7：用 dispatch_group 并行删旧样本，避免同步循环里每次 deleteObject 都等完成再删下一个
             dispatch_group_t group = dispatch_group_create();
             NSArray *samples = results ?: @[];
+            __block BOOL groupEntered = NO; // 追踪是否有任何 enter，防止无样本时 dispatch_after 导致下溢
             for (HKSample *s in samples) {
                 if ([s.metadata[HBSyntheticStepMetaKey] boolValue]) {
+                    groupEntered = YES;
                     dispatch_group_enter(group);
-                    __block BOOL deleted = NO;
                     [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e2){
-                        deleted = ok;
                         HBLog(@"[UCS] 删除旧合成步数样本 ok=%d", ok);
                         dispatch_group_leave(group);
                     }];
-                    if (!deleted) {
-                        dispatch_group_leave(group);
-                    }
                 }
             }
 
-            // 确保 group 最终会 leave（即使 delete 回调未触发）
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                dispatch_group_leave(group);
-            });
+            // 仅在确实有 enter 时才设超时兜底，避免组计数器下溢
+            if (groupEntered) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    dispatch_group_leave(group);
+                });
+            }
 
             dispatch_group_notify(group, dispatch_get_main_queue(), ^{
                 if (virtualSteps > 0) {
