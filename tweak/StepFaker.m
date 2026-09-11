@@ -148,7 +148,42 @@ static NSInteger HBReadVirtualSteps(void) {
         NSInteger sharedVal = 0;
         BOOL sharedFresh = NO;
         HBParseStepsFile(@"/var/mobile/Documents/hb_steps.txt", &sharedVal, &sharedFresh);
-        NSInteger fileValEffective = (sharedVal > 0) ? sharedVal : fileVal;
+
+        // ②b roothide 修复（核心）：UCS App 是 roothide 应用，其 /var/mobile 被重映射
+        //    到 /var/roothide/var/mobile。App 写的 /var/mobile/Documents/hb_steps.txt
+        //    实际落在真实路径 /var/roothide/var/mobile/Documents/hb_steps.txt；而本 tweak
+        //    注入到微信（普通 App）时看到的是真实 /var/mobile，读不到那个文件 —— 这正是
+        //    「健康加、微信没加」的根因。这里额外读 roothide 前缀下的真实文件补全通道。
+        NSInteger rhVal = 0;
+        BOOL rhFresh = NO;
+        HBParseStepsFile(@"/var/roothide/var/mobile/Documents/hb_steps.txt", &rhVal, &rhFresh);
+
+        // ②c roothide 修复：读取 UCS App 自身容器（com.sykes.ucs.app）。普通 App 进程的
+        //    tweak 枚举真实 /var/roothide/var/mobile/Containers/Data/Application，找到
+        //    com.sykes.ucs.app 容器后读其 Documents/hb_steps.txt —— 与 App 落盘位置一致，
+        //    是另一条不依赖 /var/mobile 重映射的稳妥通道。
+        NSInteger appContainerVal = 0;
+        BOOL appContainerFresh = NO;
+        {
+            NSString *base = @"/var/roothide/var/mobile/Containers/Data/Application";
+            NSArray *dirs = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:base error:nil];
+            for (NSString *d in dirs) {
+                NSString *meta = [base stringByAppendingFormat:@"/%@/.com.apple.mobile_container_manager.metadata.plist", d];
+                NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:meta];
+                if ([[dict objectForKey:@"MCMMetadataIdentifier"] isEqualToString:@"com.sykes.ucs.app"]) {
+                    NSString *p = [base stringByAppendingFormat:@"/%@/Documents/hb_steps.txt", d];
+                    HBParseStepsFile(p, &appContainerVal, &appContainerFresh);
+                    break;
+                }
+            }
+        }
+
+        // 合并优先级：App 自身容器 > roothide 共享文件 > 普通共享文件 > 进程自身容器
+        NSInteger fileValEffective = 0;
+        if      (appContainerVal > 0) fileValEffective = appContainerVal;
+        else if (rhVal > 0)          fileValEffective = rhVal;
+        else if (sharedVal > 0)      fileValEffective = sharedVal;
+        else                         fileValEffective = fileVal;
 
         NSInteger cfVal = 0;
         BOOL cfFresh = NO;
@@ -178,8 +213,8 @@ static NSInteger HBReadVirtualSteps(void) {
         }
         // 优先共享文件，其次进程容器文件，最后 CFPreferences；日期仅诊断不参与判断
         NSInteger result = (fileValEffective > 0) ? fileValEffective : cfVal;
-        HBProbeLog(@"READ_VIRTUAL: sharedFile=%ld(today=%d) selfFile=%ld(today=%d) cfPref=%ld(today=%d) -> virtualOffset=%ld",
-                   (long)sharedVal, sharedFresh, (long)fileVal, fileFresh, (long)cfVal, cfFresh, (long)result);
+        HBProbeLog(@"READ_VIRTUAL: selfFile=%ld shared=%ld rh=%ld appContainer=%ld cfPref=%ld -> virtualOffset=%ld",
+                   (long)fileVal, (long)sharedVal, (long)rhVal, (long)appContainerVal, (long)cfVal, (long)result);
         if (result == 99999 || result > 200000 || result <= 0) {
             HBProbeLog(@"READ_VIRTUAL_IGNORE: value=%ld 疑似残留脏值/哨兵/零增量，跳过累加（显示真实步数）", (long)result);
             return 0;
