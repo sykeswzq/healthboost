@@ -1645,6 +1645,8 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     long flights = self.flights; if (flights < 0) flights = 0;
 
+    [self saveSettings];
+
     HBWriteStepsPreference(steps);
 
     // v2.2.6 修复：必须把虚拟步数写入 HealthKit，微信才能通过 HKStatistics 路径读到
@@ -2223,7 +2225,7 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
 
                                                      resultsHandler:^(HKSampleQuery *q, NSArray *results, NSError *e) {
 
-            // v2.2.6：用 dispatch_group 并行删旧样本，避免同步循环里每次 deleteObject 都等完成再删下一个
+            // v2.2.7：用 dispatch_group 并行删旧样本，避免同步循环里每次 deleteObject 都等完成再删下一个
             dispatch_group_t group = dispatch_group_create();
             NSArray *samples = results ?: @[];
             for (HKSample *s in samples) {
@@ -2235,7 +2237,7 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
                         HBLog(@"[UCS] 删除旧合成步数样本 ok=%d", ok);
                         dispatch_group_leave(group);
                     }];
-                    if (!deleted) { // delete 本身同步失败时直接 leave
+                    if (!deleted) {
                         dispatch_group_leave(group);
                     }
                 }
@@ -2369,7 +2371,7 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
 
     [HBTodayString() writeToFile:HBLastGenPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
-    // v2.2.6：生成成功后再保存设置，避免 generateNow 开头过早写入默认值覆盖用户设置
+    // v2.2.7：生成成功后再保存设置，避免 generateNow 开头过早写入默认值覆盖用户设置
     [self saveSettings];
 
     [self updateStatus:@"运动数据已生成"];
