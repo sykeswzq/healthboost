@@ -341,6 +341,26 @@ static NSNumber *new_numberOfSteps(id self, SEL _cmd) {
 
 // 路径二：HKStatistics 聚合查询（备用通道）
 // 新逻辑：显示 = 真实聚合值(orig) + 虚拟步数(增量)
+//
+// HKStatistics 的统计工厂方法在公开 SDK 头文件里未声明（属 HealthKit
+// 运行时内部方法，越狱步数插件普遍调用它构造聚合结果）。这里用 category
+// 声明让编译器通过；运行时符号存在，能正常解析。
+@interface HKStatistics (HBFactory)
++ (instancetype)statisticsWithQuantityType:(HKQuantityType * _Nullable)quantityType
+                                 summatory:(HKQuantity * _Nullable)summatory
+                                   average:(HKQuantity * _Nullable)average
+                                     count:(NSInteger)count
+                         minimumQuantity:(HKQuantity * _Nullable)minimumQuantity
+                        maximumQuantity:(HKQuantity * _Nullable)maximumQuantity
+                      deviceChangeSamples:(NSArray<HKQuantitySample *> * _Nullable)deviceChangeSamples;
+@end
+
+// HKSampleQuery 结果 handler 的 block 类型（与 HKSampleQueryResultHandler 一致）
+typedef void (^HBHKSampleHandler)(HKSample * _Nullable sample,
+                                  HKSample * _Nullable latestSample,
+                                  NSInteger totalCount,
+                                  NSError * _Nullable error);
+
 static id (*orig_sumQ)(id, SEL) = NULL;
 static id new_sumQ(id self, SEL _cmd) {
     id result = orig_sumQ ? orig_sumQ(self, _cmd) : nil;
@@ -410,7 +430,7 @@ static id new_SQ_init(id self, SEL _cmd,
                                                                        endDate:qs.endDate];
                         }
                     }
-                    if (handler) handler(sample, latestSample, totalCount, error);
+                    if (handler) ((HBHKSampleHandler)handler)(sample, latestSample, totalCount, error);
                 }
             };
             return orig_SQ_init(self, _cmd, type, pred, limit, sorts, wrapped);

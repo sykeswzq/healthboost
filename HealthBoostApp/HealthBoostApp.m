@@ -1645,8 +1645,6 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     long flights = self.flights; if (flights < 0) flights = 0;
 
-    [self saveSettings];
-
     HBWriteStepsPreference(steps);
 
     // v2.2.6 修复：必须把虚拟步数写入 HealthKit，微信才能通过 HKStatistics 路径读到
@@ -2225,49 +2223,47 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
 
                                                      resultsHandler:^(HKSampleQuery *q, NSArray *results, NSError *e) {
 
-        for (HKSample *s in (results ?: @[])) {
-
-            if ([s.metadata[HBSyntheticStepMetaKey] boolValue]) {
-
-                [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e2){
-
-                    HBLog(@"[UCS] 删除旧合成步数样本 ok=%d", ok);
-
-                }];
-
+            // v2.2.6：用 dispatch_group 并行删旧样本，避免同步循环里每次 deleteObject 都等完成再删下一个
+            dispatch_group_t group = dispatch_group_create();
+            NSArray *samples = results ?: @[];
+            for (HKSample *s in samples) {
+                if ([s.metadata[HBSyntheticStepMetaKey] boolValue]) {
+                    dispatch_group_enter(group);
+                    __block BOOL deleted = NO;
+                    [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e2){
+                        deleted = ok;
+                        HBLog(@"[UCS] 删除旧合成步数样本 ok=%d", ok);
+                        dispatch_group_leave(group);
+                    }];
+                    if (!deleted) { // delete 本身同步失败时直接 leave
+                        dispatch_group_leave(group);
+                    }
+                }
             }
 
-        }
+            // 确保 group 最终会 leave（即使 delete 回调未触发）
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                dispatch_group_leave(group);
+            });
 
-        if (virtualSteps > 0) {
+            dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+                if (virtualSteps > 0) {
+                    HKQuantity *qty = [HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:(double)virtualSteps];
+                    HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:stepType
+                                                                                  quantity:qty
+                                                                               startDate:startOfDay
+                                                                                 endDate:now
+                                                                                   device:[HKDevice localDevice]
+                                                                                 metadata:@{HBSyntheticStepMetaKey: @YES}];
+                    [self saveSamplePrivately:sample completion:^(BOOL ok, NSError *e3){
+                        HBLog(@"[UCS] 写入合成步数(增量)%ld ok=%d", virtualSteps, ok);
+                    }];
+                } else {
+                    HBLog(@"[UCS] 虚拟步数=0，仅清理旧合成样本");
+                }
+            });
 
-            HKQuantity *qty = [HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:(double)virtualSteps];
-
-            HKQuantitySample *sample = [HKQuantitySample quantitySampleWithType:stepType
-
-                                                                      quantity:qty
-
-                                                                   startDate:startOfDay
-
-                                                                     endDate:now
-
-                                                                       device:[HKDevice localDevice]
-
-                                                                     metadata:@{HBSyntheticStepMetaKey: @YES}];
-
-            [self saveSamplePrivately:sample completion:^(BOOL ok, NSError *e3){
-
-                HBLog(@"[UCS] 写入合成步数(增量)%ld ok=%d", virtualSteps, ok);
-
-            }];
-
-        } else {
-
-            HBLog(@"[UCS] 虚拟步数=0，仅清理旧合成样本");
-
-        }
-
-    }];
+        }];
 
     [self.healthStore executeQuery:delQ];
 
@@ -2372,6 +2368,9 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
     // 记录「今天已生成」，供 checkAndCatchUpGeneration 判断，避免重复生成
 
     [HBTodayString() writeToFile:HBLastGenPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+    // v2.2.6：生成成功后再保存设置，避免 generateNow 开头过早写入默认值覆盖用户设置
+    [self saveSettings];
 
     [self updateStatus:@"运动数据已生成"];
 
