@@ -889,6 +889,8 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
 @property (assign, nonatomic) double ratio;        // 步距系数 0.5~0.8，用于推算距离
 
+@property (assign, nonatomic) BOOL enabled;
+
 @property (assign, nonatomic) BOOL scheduleOn;
 
 @property (assign, nonatomic) NSInteger schedHour;
@@ -984,7 +986,7 @@ static NSString *HBTodayString(void) {
 // v2.2.9：回到前台时检查是否需要补生成（比 applicationDidBecomeActive 更可靠）
 - (void)checkAndCatchUpGeneration {
 
-    if (!self.scheduleOn || self.busy) return;
+    if (!self.scheduleOn || !self.enabled || self.busy) return;
 
     NSString *last = [NSString stringWithContentsOfFile:HBLastGenPath() encoding:NSUTF8StringEncoding error:nil];
 
@@ -1156,10 +1158,10 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     if (s == 0) return 3;
 
-    // 操作 section：仅生成按钮
     if (s == 1) return 1;
 
     // 定时生成section：生成时间 + 设置时间
+
     return 2;
 
 }
@@ -1222,11 +1224,14 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     } else if (ip.section == 1) {
 
-        // 生成按钮
         cell.imageView.image = [UIImage systemImageNamed:@"plus.circle.fill"];
+
         cell.imageView.tintColor = [UIColor systemGreenColor];
+
         cell.textLabel.text = @"生成运动数据";
+
         cell.textLabel.textColor = [UIColor systemBlueColor];
+
         cell.detailTextLabel.text = nil;
 
     } else {
@@ -1480,6 +1485,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 }
 
 
+
 - (void)scheduleDailyNotification {
 
     UNUserNotificationCenter *c = [UNUserNotificationCenter currentNotificationCenter];
@@ -1538,7 +1544,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:HBSettingsKey];
 
-    if (!d) d = @{@"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};
+    if (!d) d = @{@"enabled":@YES, @"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};
+
+    self.enabled = [d[@"enabled"] boolValue];
 
     self.steps = [d[@"steps"] longValue]; if (self.steps <= 0) self.steps = 1000;
 
@@ -1560,7 +1568,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 - (void)saveSettings {
 
-    NSDictionary *d = @{@"steps":@(self.steps), @"ratio":@(self.ratio), @"flights":@(self.flights), @"scheduleOn":@(self.scheduleOn), @"hour":@(self.schedHour), @"minute":@(self.schedMinute)};
+    NSDictionary *d = @{@"enabled":@(self.enabled), @"steps":@(self.steps), @"ratio":@(self.ratio), @"flights":@(self.flights), @"scheduleOn":@(self.scheduleOn), @"hour":@(self.schedHour), @"minute":@(self.schedMinute)};
 
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
 
@@ -1597,6 +1605,8 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (void)generateNow {
 
     if (self.busy) return;
+
+    if (!self.enabled) { [self showAlert:@"已禁用" message:@"请先打开「启用」"]; return; }
 
     long steps = self.steps; if (steps < 0) steps = 0;
 
