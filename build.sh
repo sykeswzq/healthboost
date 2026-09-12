@@ -1,23 +1,24 @@
 #!/bin/bash
-# build trigger marker: rebuild to refresh CI checkout (UCS rebrand + Alipay fix + single deb)
+# build trigger marker: rebuild to refresh CI checkout
 set -euo pipefail
 
-# ============================================================================
-# HealthBoost æå»ºèæ¬ï¼roothide èå¼ Â· åä¸ deb åæ¶å?App + tweakï¼?# ----------------------------------------------------------------------------
-# å³é®çº¦å®ï¼æ¥è?roothide å®æ¹ RootHideManagerApp / Developer ææ¡£ï¼ï¼
-#   1) App è£å¨ãæ ¹ç¸å¯¹ã?./Applications/UCS.app
-#      ââ?roothide ççå®æ ¹å°±æ¯ /var/roothideï¼dpkg è§£ååè½å?#         /var/roothide/Applications/UCS.appãç»ä¸è½ç?./var/jb/ æ?#         ./var/roothide/ è¿ç§å¸¦åç¼çè·¯å¾ï¼dpkg ä¼æ¥ No such fileï¼ã?#   2) tweak è£å¨ãæ ¹ç¸å¯¹ã?./Library/MobileSubstrate/DynamicLibraries/
-#      ââ?è§£ååè½å?/var/roothide/Library/MobileSubstrate/DynamicLibraries/ã?#   3) ç­¾åç?ldid -M -S<entitlements>ï¼å®æ¹åæ³ï¼ãç¦æ­¢å¨æ¬æºç?Python ææ
-#      Mach-O ç­¾åââpage-hash / superblob ææååï¼åç­¾åä¼è¢« amfi å?#      main() åç´æ?SIGKILLï¼è¡¨ç°ä¸ºç¹å¾æ éªéãæ  .ipsãAppSync ä¹æä¸äºï¼ã?#   4) entitlements å¿é¡»å?roothide 4 é¡¹åºç¡æé + healthkit ç§ææé
-#      ï¼è§ HealthBoost.entitlements.plistï¼ã?# ============================================================================
+# HealthBoost build script (roothide layout - single deb with App + tweak)
+# Key conventions (from roothide official docs):
+#   1) App must be at relative path ./Applications/UCS.app
+#      - roothide's real root is /var/roothide
+#      - dpkg will extract to /var/roothide/Applications/UCS.app
+#      - NEVER use paths like ./var/jb/ or ./var/roothide/ (dpkg will fail)
+#   2) Tweak must be at relative path ./Library/MobileSubstrate/DynamicLibraries/
+#   3) Use ldid -M -S<entitlements> for signing (official method)
+#   4) Entitlements must include roothide 4 basic permissions + healthkit private permission
 
-# 版本号：v2.2.14（修复：通知点击不触发 + 后台切换闪退根因）
+# Version: v2.2.14 (fixed: notification click not triggering + background switch crash)
 VER="2.2.14"
-echo "版本号: $VER"
+echo "Version: $VER"
 PKG="com.sykes.ucs"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
 
-echo "[1/5] åå»º staging ç®å½ï¼roothide æ ¹ç¸å¯?./Applications + ./Libraryï¼?
+echo "[1/5] Creating staging directory (roothide layout)"
 rm -rf staging tweak_staging pkg
 mkdir -p staging/Applications/UCS.app
 mkdir -p staging/Library/MobileSubstrate/DynamicLibraries
@@ -26,7 +27,7 @@ mkdir -p tweak_staging/Library/MobileSubstrate/DynamicLibraries
 
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
-echo "[2/5] ç¼è¯ iOS App (UCS.app) â?arm64 + arm64e"
+echo "[2/5] Compiling iOS App (UCS.app) - arm64 + arm64e"
 xcrun --sdk iphoneos clang \
   -framework UIKit \
   -framework Foundation \
@@ -42,7 +43,7 @@ xcrun --sdk iphoneos clang \
 chmod 755 staging/Applications/UCS.app/HealthBoostApp
 echo "  app: $(wc -c < staging/Applications/UCS.app/HealthBoostApp) bytes"
 
-echo "[3/5] æ·è´ App èµæº + ldid ç­¾å"
+echo "[3/5] Copying app resources + signing with ldid"
 cp HealthBoostApp/Info.plist  staging/Applications/UCS.app/
 cp HealthBoostApp/HealthBoost/AppIcon60x60@2x.png staging/Applications/UCS.app/
 cp HealthBoostApp/HealthBoost/PkgInfo    staging/Applications/UCS.app/
@@ -51,35 +52,35 @@ chmod 644 staging/Applications/UCS.app/AppIcon60x60@2x.png
 chmod 644 staging/Applications/UCS.app/PkgInfo
 
 if ! command -v ldid >/dev/null 2>&1; then
-  echo "ERROR: ldid æªå®è£ï¼æ æ³ç­¾åï¼ç»æ­¢æå»?
+  echo "ERROR: ldid not installed, cannot sign"
   exit 1
 fi
 if [ ! -f HealthBoost.entitlements.plist ]; then
-  echo "ERROR: HealthBoost.entitlements.plist ç¼ºå¤±ï¼ç»æ­¢æå»?
+  echo "ERROR: HealthBoost.entitlements.plist missing"
   exit 1
 fi
-# -Mï¼åæ¸é¤å·²æï¼å¯è½åçï¼ç­¾åï¼?S<file>ï¼ç¨å®æ¹ entitlements éæ° ad-hoc ç­¾å
 ldid -M -SHealthBoost.entitlements.plist staging/Applications/UCS.app/HealthBoostApp
-echo "  å·²ç¨ ldid éç­¾ App"
+echo "  signed with ldid"
 
-# æ ¡éª 1ï¼ç­¾åå¿é¡»å« healthkit æéï¼å¦åæ æ³åå¥å¥åº·æ°æ®ï¼
+# Verify signature has healthkit permission
 if ! ldid -e staging/Applications/UCS.app/HealthBoostApp 2>/dev/null | grep -q "healthkit"; then
-  echo "ERROR: ç­¾ååæªæ£æµå° healthkit æéï¼ç»æ­¢æå»?
+  echo "ERROR: signature missing healthkit permission"
   exit 1
 fi
-# æ ¡éª 2ï¼å¿é¡»å« roothide åºç¡ no-sandbox æé
+# Verify signature has roothide no-sandbox permission
 if ! ldid -e staging/Applications/UCS.app/HealthBoostApp 2>/dev/null | grep -q "no-sandbox"; then
-  echo "ERROR: ç­¾ååæªæ£æµå° com.apple.private.security.no-sandboxï¼App å?roothide ä¸ä¼è¢«æ²çéå¶ï¼ç»æ­¢æå»º"
+  echo "ERROR: signature missing com.apple.private.security.no-sandbox"
   exit 1
 fi
-# æ ¡éª 3ï¼äºè¿å¶ä»æ¯åæ³ Mach-Oï¼magic éªè¯ï¼?magic=$(xxd -p -l4 staging/Applications/UCS.app/HealthBoostApp 2>/dev/null || od -An -tx1 -N4 staging/Applications/UCS.app/HealthBoostApp | tr -d ' \n')
+# Verify Mach-O magic
+magic=$(xxd -p -l4 staging/Applications/UCS.app/HealthBoostApp 2>/dev/null || od -An -tx1 -N4 staging/Applications/UCS.app/HealthBoostApp | tr -d ' \n')
 if [ "$magic" != "cafebabe" ]; then
-  echo "ERROR: ç­¾åå?Mach-O å¤´å¼å¸?(magic=$magic)ï¼ç»æ­¢æå»?
+  echo "ERROR: Mach-O header invalid (magic=$magic)"
   exit 1
 fi
-echo "  ç­¾åæ ¡éªéè¿: healthkit + no-sandbox åå­å¨ï¼Mach-O å¤´æ­£å¸?
+echo "  signature verified: healthkit + no-sandbox present, Mach-O header OK"
 
-echo "[4/5] ç¼è¯å¹¶ç­¾å?StepFaker tweakï¼å¹¶å¥åä¸ debï¼?
+echo "[4/5] Compiling and signing StepFaker tweak (embedded in same deb)"
 xcrun --sdk iphoneos clang \
   -dynamiclib -fobjc-arc \
   -framework Foundation -framework CoreFoundation -framework CoreMotion -framework HealthKit \
@@ -96,25 +97,26 @@ chmod 644 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
 
 if command -v ldid >/dev/null 2>&1; then
   ldid -M -S tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
-  echo "  å·²ç¨ ldid ç­¾å tweak dylib"
+  echo "  signed tweak dylib with ldid"
 else
-  echo "WARN: ldid ä¸å¯ç¨ï¼tweak dylib æªç­¾åï¼roothide ä¸å¯è½å è½½å¤±è´¥ï¼"
+  echo "WARN: ldid not available, tweak dylib unsigned (may fail to load on roothide)"
 fi
 
-# æ ¡éª dylib ä»æ¯åæ³ Mach-Oï¼èäºè¿å?magic=cafebabeï¼?smagic=$(xxd -p -l4 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib 2>/dev/null || od -An -tx1 -N4 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib | tr -d ' \n')
+# Verify dylib Mach-O magic
+smagic=$(xxd -p -l4 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib 2>/dev/null || od -An -tx1 -N4 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib | tr -d ' \n')
 if [ "$smagic" != "cafebabe" ]; then
-  echo "ERROR: tweak dylib Mach-O å¤´å¼å¸?(magic=$smagic)ï¼ç»æ­¢æå»?
+  echo "ERROR: tweak dylib Mach-O header invalid (magic=$smagic)"
   exit 1
 fi
-echo "  tweak ç­¾åæ ¡éªéè¿: Mach-O å¤´æ­£å¸?
+echo "  tweak signed verified: Mach-O header OK"
 
-echo "  å°?tweak å¹¶å¥ä¸?staging"
+echo "  merging tweak into staging"
 cp tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
 cp tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
 chmod 755 staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
 chmod 644 staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
 
-echo "[5/5] çæ control / postinst å¹¶æåï¼åä¸ debï¼?
+echo "[5/5] Generating control/postinst and packaging (single deb)"
 cat > staging/DEBIAN/control << EOF
 Package: com.sykes.ucs
 Name: UCS
@@ -124,20 +126,24 @@ Installed-Size: 1152
 Depends: firmware (>= 13.0)
 Maintainer: sykeswzq
 Author: sykeswzq
-Description: UCS - è¿å¨æ°æ®æ³¨å¥å·¥å·ï¼æ¯æå¾®ä¿¡æ­¥æ°åæ­¥ã?Section: utilities
+Description: UCS - motion data injection tool, supports WeChat step sync.
+Section: utilities
 Priority: optional
 EOF
 
 cat > staging/DEBIAN/postinst << 'EOF'
 #!/bin/sh
-# roothide ä¸?App å?/Applicationsï¼? /var/roothide/Applicationsï¼ã?# å·æ°å¾æ ç¼å­ï¼è®© SpringBoard æ³¨åè¿ä¸ªæ?Appï¼uicache -a å¨éï¼åæ¾å¼è¡¥ä¸æ¬¡è·¯å¾ï¼ã?if [ -x /var/jb/usr/bin/uicache ]; then
+# roothide: App is in /Applications (absolute path)
+# Refresh icon cache so SpringBoard registers this new App
+if [ -x /var/jb/usr/bin/uicache ]; then
   /var/jb/usr/bin/uicache -a 2>/dev/null || true
   /var/jb/usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
 elif [ -x /usr/bin/uicache ]; then
   /usr/bin/uicache -a 2>/dev/null || true
   /usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
 fi
-# è£å®å¼ºå¶ææå¾®ä¿¡ï¼è®?tweak å¨ä¸æ¬¡å¯å¨æ¶å è½½å¹¶è¯»åææ°æ­¥æ°ã?for k in /var/jb/bin/killall /usr/bin/killall killall; do
+# Force kill WeChat so tweak reloads on next launch
+for k in /var/jb/bin/killall /usr/bin/killall killall; do
   if [ -x "$k" ]; then
     "$k" -9 WeChat 2>/dev/null || true
     break
