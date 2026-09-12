@@ -984,7 +984,7 @@ static NSString *HBTodayString(void) {
 // v2.2.9：回到前台时检查是否需要补生成（比 applicationDidBecomeActive 更可靠）
 - (void)checkAndCatchUpGeneration {
 
-    if (!self.scheduleOn || !self.enabled || self.busy) return;
+    if (!self.scheduleOn || self.busy) return;
 
     NSString *last = [NSString stringWithContentsOfFile:HBLastGenPath() encoding:NSUTF8StringEncoding error:nil];
 
@@ -1542,9 +1542,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:HBSettingsKey];
 
-    if (!d) d = @{@"enabled":@YES, @"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};
-
-    self.enabled = [d[@"enabled"] boolValue];
+    if (!d) d = @{@"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};
 
     self.steps = [d[@"steps"] longValue]; if (self.steps <= 0) self.steps = 1000;
 
@@ -1566,7 +1564,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 - (void)saveSettings {
 
-    NSDictionary *d = @{@"enabled":@(self.enabled), @"steps":@(self.steps), @"ratio":@(self.ratio), @"flights":@(self.flights), @"scheduleOn":@(self.scheduleOn), @"hour":@(self.schedHour), @"minute":@(self.schedMinute)};
+    NSDictionary *d = @{@"steps":@(self.steps), @"ratio":@(self.ratio), @"flights":@(self.flights), @"scheduleOn":@(self.scheduleOn), @"hour":@(self.schedHour), @"minute":@(self.schedMinute)};
 
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
 
