@@ -888,7 +888,6 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 @property (assign, nonatomic) long flights;
 
 @property (assign, nonatomic) double ratio;        // 步距系数 0.5~0.8，用于推算距离
-
 @property (assign, nonatomic) BOOL scheduleOn;
 
 @property (assign, nonatomic) NSInteger schedHour;
@@ -983,9 +982,7 @@ static NSString *HBTodayString(void) {
 
 // v2.2.9：回到前台时检查是否需要补生成（比 applicationDidBecomeActive 更可靠）
 - (void)checkAndCatchUpGeneration {
-
     if (!self.scheduleOn || self.busy) return;
-
     NSString *last = [NSString stringWithContentsOfFile:HBLastGenPath() encoding:NSUTF8StringEncoding error:nil];
 
     last = [last stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -1541,9 +1538,13 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (void)loadSettings {
 
     NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:HBSettingsKey];
+<<<<<<< HEAD
 
     if (!d) d = @{@"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};
 
+=======
+    if (!d) d = @{@"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};
+>>>>>>> v2.2.16-real-virtual
     self.steps = [d[@"steps"] longValue]; if (self.steps <= 0) self.steps = 1000;
 
     self.ratio = [d[@"ratio"] doubleValue]; if (self.ratio<0.5) self.ratio=0.5; if (self.ratio>0.8) self.ratio=0.8;
@@ -1563,9 +1564,13 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 
 - (void)saveSettings {
+<<<<<<< HEAD
 
     NSDictionary *d = @{@"steps":@(self.steps), @"ratio":@(self.ratio), @"flights":@(self.flights), @"scheduleOn":@(self.scheduleOn), @"hour":@(self.schedHour), @"minute":@(self.schedMinute)};
 
+=======
+    NSDictionary *d = @{@"steps":@(self.steps), @"ratio":@(self.ratio), @"flights":@(self.flights), @"scheduleOn":@(self.scheduleOn), @"hour":@(self.schedHour), @"minute":@(self.schedMinute)};
+>>>>>>> v2.2.16-real-virtual
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
 
     [ud setObject:d forKey:HBSettingsKey];
@@ -1601,7 +1606,10 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (void)generateNow {
 
     if (self.busy) return;
+<<<<<<< HEAD
 
+=======
+>>>>>>> v2.2.16-real-virtual
     long steps = self.steps; if (steps < 0) steps = 0;
 
     double distanceMeters = steps * self.ratio;
