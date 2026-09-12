@@ -318,6 +318,7 @@ static BOOL HBIsStepType(id type) {
 
 // 路径一：CMPedometerData.numberOfSteps（微信命中，1.0.131 验证可用）
 // 新逻辑：显示 = 真实步数(orig) + 虚拟步数(增量)
+static NSNumber *(*orig_numberOfSteps)(id, SEL) = NULL;
 static NSNumber *new_numberOfSteps(id self, SEL _cmd) {
     NSNumber *real = orig_numberOfSteps ? orig_numberOfSteps(self, _cmd) : nil;
     NSInteger virtual = HBReadVirtualSteps();
