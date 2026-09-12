@@ -901,6 +901,8 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
 @property (strong, nonatomic) HKHealthStore *healthStore;
 
+@property (assign, nonatomic) BOOL appWasActiveWhenStarted;
+
 @property (strong, nonatomic) UILabel *statusLabel;
 
 @property (strong, nonatomic) UIDatePicker *timePicker;
@@ -953,29 +955,36 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
     if (self.scheduleOn) [self scheduleDailyNotification];
 
-
-
-    // v1.0.201 补生成：通知横幅若没被点到（App 未运行/用户忽略），当天就不会生成，
-
-    // 微信会一直显示昨天的残留值。现在 App 每次启动/回到前台都检查一次：
-
-    // 「已开定时 + 今天没生成过 + 已过设定时间」就自动补生成，不依赖点横幅。
-
-    [[NSNotificationCenter defaultCenter] addObserver:self
-
-                                             selector:@selector(checkAndCatchUpGeneration)
-
-                                                 name:UIApplicationWillEnterForegroundNotification
-
-                                               object:nil];
-
-    // v2.2.9：移除 performSelector:afterDelay 自动触发生成，避免用户未点"生成"就产生步数
-
-
-
     HBLog(@"[UCS] App 启动");
 
 }
+
+- (void)applicationWillResignActive:(UIApplication *)application {
+    // 应用即将进入后台/锁屏：重置 busy，防止后台异步回调访问已释放的 self
+    self.busy = NO;
+    self.appWasActiveWhenStarted = NO;
+    HBLog(@"[UCS] applicationWillResignActive: 重置 busy");
+}
+
+- (void)applicationDidBecomeActive:(UIApplication *)application {
+    // 应用回到前台：刷新设置，检查是否需要补生成
+    [self loadSettings];
+    if (self.scheduleOn) {
+        NSString *today = HBTodayString();
+        NSString *lastGen = [NSString stringWithContentsOfFile:HBLastGenPath() encoding:NSUTF8StringEncoding error:nil];
+        if (lastGen.length == 0 || ![lastGen isEqualToString:today]) {
+            // 今天还没生成过，且时间已过
+            NSDate *now = [NSDate date];
+            NSDateComponents *comps = [[NSCalendar currentCalendar] components:NSCalendarUnitHour|NSCalendarUnitMinute fromDate:now];
+            if (comps.hour > self.schedHour || (comps.hour == self.schedHour && comps.minute >= self.schedMinute)) {
+                // 时间已过，需要补生成
+                HBLog(@"[UCS] 回到前台发现今天未生成，触发补生成");
+                [self generateNow];
+            }
+        }
+    }
+}
+
 
 
 
@@ -998,36 +1007,6 @@ static NSString *HBTodayString(void) {
     f.dateFormat = @"yyyy-MM-dd";
 
     return [f stringFromDate:[NSDate date]];
-
-}
-
-
-
-- (void)checkAndCatchUpGeneration {
-
-    if (!self.scheduleOn || !self.enabled || self.busy) return;
-
-    NSString *last = [NSString stringWithContentsOfFile:HBLastGenPath() encoding:NSUTF8StringEncoding error:nil];
-
-    last = [last stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-
-    if ([last isEqualToString:HBTodayString()]) return;   // 今天已生成过
-
-    NSCalendar *cal = [NSCalendar currentCalendar];
-
-    NSDateComponents *now = [cal components:NSCalendarUnitHour|NSCalendarUnitMinute fromDate:[NSDate date]];
-
-    if (now.hour < self.schedHour || (now.hour == self.schedHour && now.minute < self.schedMinute)) return;   // 还没到设定时间
-
-    [self loadSettings];   // 强制从磁盘刷新，避免用内存里的旧步数值
-
-    HBLog(@"[UCS] 错过定时通知，自动补生成今日数据 (设定 %02ld:%02ld, 当前 %02ld:%02ld)",
-
-          (long)self.schedHour, (long)self.schedMinute, (long)now.hour, (long)now.minute);
-
-    [self updateStatus:@"已自动补生成今日数据…"];
-
-    [self generateNow];
 
 }
 
@@ -1538,31 +1517,26 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center willPresentNotification:(UNNotification *)notification withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
-
+    // willPresentNotification: 在 App 处于后台/锁屏时被系统调用
+    // 此时不应自动触发生成（避免「未点按钮自动生成」）
     if ([notification.request.identifier isEqualToString:@"UCSDailyGen"]) {
-
-        [self loadSettings];   // v1.0.201：App 挂起恢复时 viewDidLoad 不会重跑，先刷新磁盘设置
-
-        [self generateNow];
-
+        HBLog(@"[UCS] willPresentNotification: 收到定时通知但 App 在后台，跳过自动生成");
     }
-
     completionHandler(UNNotificationPresentationOptionNone);
-
 }
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void(^)(void))completionHandler {
-
     if ([response.notification.request.identifier isEqualToString:@"UCSDailyGen"]) {
-
-        [self loadSettings];
-
-        [self generateNow];
-
+        // didReceiveNotificationResponse: 用户在通知上点击时触发
+        // 检查 App 是否之前在前台运行过（由 appWasActiveWhenStarted 标记）
+        if (self.appWasActiveWhenStarted) {
+            [self loadSettings];
+            [self generateNow];
+        } else {
+            HBLog(@"[UCS] didReceiveNotificationResponse: App 非前台状态，跳过自动生成");
+        }
     }
-
     completionHandler();
-
 }
 
 
@@ -1625,12 +1599,6 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     [self presentViewController:alert animated:YES completion:nil];
 
-}
-
-
-
-- (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 
@@ -2372,7 +2340,7 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
 
     self.busy = NO;
 
-    // 记录「今天已生成」，供 checkAndCatchUpGeneration 判断，避免重复生成
+    // 记录「今天已生成」，避免重复生成（定时/手动触发后写入）
 
     [HBTodayString() writeToFile:HBLastGenPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
