@@ -20,7 +20,7 @@ set -euo pipefail
 # ============================================================================
 
 # 版本号：v2.0 最终版
-VER="2.0"
+VER="2.2.16"
 echo "版本号: $VER"
 PKG="com.sykes.ucs"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"

@@ -84,8 +84,8 @@ static void HBProbeLog(NSString *fmt, ...);
 // 「今天」判断（本地时区）—— 仅用于诊断日志。
 // v1.0.201 曾做过「非今天的值失效」，但实际根因是 App 保存设置时不写步数文件
 // （v1.0.202 已改为保存即写入），过期失效反而导致「第二天生成前微信显示真实步数」。
-// v1.0.202 语义：文件值 = 用户当前设定的目标步数，持续生效直到用户修改；
-// 99999 / >200000 哨兵脏值仍在 HBReadFakeSteps 里拦截。
+// v1.0.202 语义：文件值 = 用户当前设定的虚拟步数增量，持续生效直到用户修改；
+// 99999 / >200000 哨兵脏值仍在 HBReadVirtualSteps 里拦截。
 static NSString *HBFakeTodayString(void) {
     NSDateFormatter *f = [[NSDateFormatter alloc] init];
     f.dateFormat = @"yyyy-MM-dd";
@@ -124,9 +124,11 @@ static void HBParseStepsFile(NSString *path, NSInteger *outVal, BOOL *outFresh) 
     *outFresh = fresh;
 }
 
-// 读取目标步数（0 = 不篡改，原样放行）。
-// v1.0.202：文件值 = 当前目标，不限「今天」；日期只进日志。
-static NSInteger HBReadFakeSteps(void) {
+// 读取虚拟步数增量（0 = 不篡改，原样放行真实步数）。
+// v2.2.16：文件值 = 用户当前设定的【虚拟步数增量】，持续生效直到用户修改；
+// 日期只进日志，不影响取值。
+// 新逻辑：显示步数 = 真实步数 + 虚拟步数增量
+static NSInteger HBReadVirtualSteps(void) {
     @autoreleasepool {
         // ① 进程自身容器里的 hb_steps.txt（微信容器由 App 写入）
         NSInteger fileVal = 0;
@@ -315,18 +317,23 @@ static BOOL HBIsStepType(id type) {
 }
 
 // 路径一：CMPedometerData.numberOfSteps（微信命中，1.0.131 验证可用）
-static NSNumber *(*orig_numberOfSteps)(id, SEL) = NULL;
+// 新逻辑：显示 = 真实步数(orig) + 虚拟步数(增量)
 static NSNumber *new_numberOfSteps(id self, SEL _cmd) {
-    NSInteger fake = HBReadFakeSteps();
-    if (fake > 0) return @(fake);
-    return orig_numberOfSteps(self, _cmd);
+    NSNumber *real = orig_numberOfSteps ? orig_numberOfSteps(self, _cmd) : nil;
+    NSInteger virtual = HBReadVirtualSteps();
+    HBProbeLog(@"NUM_STEPS: real=%@ virtual=%ld -> 返回 real+virtual", real, (long)virtual);
+    if (virtual > 0 && real != nil) {
+        long total = (long)[real longValue] + (long)virtual;
+        return @(total);
+    }
+    return real;
 }
 
 // 路径二：HKStatistics 聚合查询（备用通道）
 static id (*orig_sumQ)(id, SEL) = NULL;
 static id new_sumQ(id self, SEL _cmd) {
     if (HBIsStepType([self quantityType])) {
-        NSInteger fake = HBReadFakeSteps();
+        NSInteger fake = HBReadVirtualSteps();
         if (fake > 0) {
             static BOOL sumLogged = NO;
             if (!sumLogged) {
@@ -342,49 +349,65 @@ static id new_sumQ(id self, SEL _cmd) {
 
 static id (*orig_avgQ)(id, SEL) = NULL;
 static id new_avgQ(id self, SEL _cmd) {
+    id result = orig_avgQ ? orig_avgQ(self, _cmd) : nil;
     if (HBIsStepType([self quantityType])) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0) {
-            static BOOL avgLogged = NO;
-            if (!avgLogged) {
-                avgLogged = YES;
-                HBProbeLog(@"HKSTAT_AVG: returning fake=%ld", (long)fake);
+        if (result && [result isKindOfClass:[HKStatistics class]]) {
+            HKQuantity *q = [(HKStatistics *)result averageQuantity];
+            if (q) {
+                NSInteger v = HBReadVirtualSteps();
+                if (v > 0) {
+                    static BOOL avgLogged = NO;
+                    if (!avgLogged) {
+                        avgLogged = YES;
+                        HBProbeLog(@"HKSTAT_AVG: real=%@ virtual=%ld -> 返回 real+virtual", q, (long)v);
+                    }
+                    HKUnit *unit = [HKUnit countUnit];
+                    double nv = [q doubleValueForUnit:unit] + (double)v;
+                    return [HKQuantity quantityWithUnit:unit doubleValue:nv];
+                }
             }
-            HKUnit *unit = [HKUnit countUnit];
-            return [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
         }
     }
-    return orig_avgQ(self, _cmd);
+    return result;
 }
 
 // 路径三：HKSampleQuery 逐样本查询（备用通道）
+// 新逻辑：在 handler 回调中累加虚拟步数
+// HKSampleQuery resultsHandler block 类型
+typedef void (^HBHKSampleHandler)(HKSample * _Nullable sample,
+                                  HKSample * _Nullable latestSample,
+                                  NSInteger totalCount,
+                                  NSError * _Nullable error);
 static id (*orig_SQ_init)(id, SEL, id, id, unsigned long, id, id) = NULL;
 static id new_SQ_init(id self, SEL _cmd,
                       id type, id pred, unsigned long limit, id sorts, id handler) {
-    if (HBIsStepType(type)) {
-        NSInteger fake = HBReadFakeSteps();
-        if (fake > 0 && handler) {
-            static BOOL sqLogged = NO;
-            if (!sqLogged) {
-                sqLogged = YES;
-                HBProbeLog(@"HKSAMPLE_QUERY: intercepting step query, returning fake=%ld", (long)fake);
-            }
-            id origHandler = handler;
-            id newHandler = ^(id q, id results, id error) {
+    if (handler && type && [type isKindOfClass:[HKSampleType class]]) {
+        NSString *tid = [(HKSampleType *)type identifier];
+        if ([tid isEqualToString:HKQuantityTypeIdentifierStepCount]) {
+            // 包装 handler，注入虚拟步数
+            id wrapped = ^(HKSample * _Nullable sample, HKSample * _Nullable latestSample, NSInteger totalCount, NSError * _Nullable error) {
                 @autoreleasepool {
-                    HKUnit *unit = [HKUnit countUnit];
-                    HKQuantity *qty = [HKQuantity quantityWithUnit:unit doubleValue:(double)fake];
-                    HKQuantitySample *sample = [HKQuantitySample
-                        quantitySampleWithType:type
-                                      quantity:qty
-                                     startDate:[NSDate dateWithTimeIntervalSince1970:0]
-                                       endDate:[NSDate date]];
-                    NSArray *newResults = @[ sample ];
-                    void (^h)(id, id, id) = origHandler;
-                    h(q, newResults, error);
+                    if (sample && [sample isKindOfClass:[HKQuantitySample class]]) {
+                        HKQuantitySample *qs = (HKQuantitySample *)sample;
+                        NSInteger v = HBReadVirtualSteps();
+                        if (v > 0) {
+                            double cur = [qs.quantity doubleValueForUnit:[HKUnit countUnit]];
+                            double nv = cur + (double)v;
+                            sample = [HKQuantitySample quantitySampleWithType:qs.quantityType
+                                                                       quantity:[HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:nv]
+                                                                     startDate:qs.startDate
+                                                                       endDate:qs.endDate];
+                            static BOOL sqLogged = NO;
+                            if (!sqLogged) {
+                                sqLogged = YES;
+                                HBProbeLog(@"HKSAMPLE_QUERY: real=%@ virtual=%ld -> 返回 real+virtual", qs.quantity, (long)v);
+                            }
+                        }
+                    }
+                    if (handler) ((HBHKSampleHandler)handler)(sample, latestSample, totalCount, error);
                 }
             };
-            return orig_SQ_init(self, _cmd, type, pred, limit, sorts, newHandler);
+            return orig_SQ_init(self, _cmd, type, pred, limit, sorts, wrapped);
         }
     }
     return orig_SQ_init(self, _cmd, type, pred, limit, sorts, handler);
