@@ -51,7 +51,7 @@ chmod 755 staging/Applications/UCS.app/HealthBoostApp
 echo "  app: $(wc -c < staging/Applications/UCS.app/HealthBoostApp) bytes"
 
 echo "[3/5] 拷贝 App 资源 + ldid 签名"
-cp HealthBoostApp/HealthBoost/Info.plist  staging/Applications/UCS.app/
+cp HealthBoostApp/Info.plist  staging/Applications/UCS.app/
 cp HealthBoostApp/HealthBoost/AppIcon60x60@2x.png staging/Applications/UCS.app/
 cp HealthBoostApp/HealthBoost/PkgInfo    staging/Applications/UCS.app/
 chmod 644 staging/Applications/UCS.app/Info.plist
