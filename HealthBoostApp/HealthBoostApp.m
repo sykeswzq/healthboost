@@ -889,8 +889,6 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
 @property (assign, nonatomic) double ratio;        // 步距系数 0.5~0.8，用于推算距离
 
-@property (assign, nonatomic) BOOL enabled;
-
 @property (assign, nonatomic) BOOL scheduleOn;
 
 @property (assign, nonatomic) NSInteger schedHour;
@@ -1605,8 +1603,6 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (void)generateNow {
 
     if (self.busy) return;
-
-    if (!self.enabled) { [self showAlert:@"已禁用" message:@"请先打开「启用」"]; return; }
 
     long steps = self.steps; if (steps < 0) steps = 0;
 
