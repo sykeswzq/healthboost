@@ -3,29 +3,21 @@
 set -euo pipefail
 
 # ============================================================================
-# HealthBoost 构建脚本（roothide 范式 · 单一 deb 同时含 App + tweak）
-# ----------------------------------------------------------------------------
-# 关键约定（来自 roothide 官方 RootHideManagerApp / Developer 文档）：
-#   1) App 装在【根相对】 ./Applications/UCS.app
-#      —— roothide 的真实根就是 /var/roothide，dpkg 解包后落到
-#         /var/roothide/Applications/UCS.app。绝不能用 ./var/jb/ 或
-#         ./var/roothide/ 这种带前缀的路径（dpkg 会报 No such file）。
-#   2) tweak 装在【根相对】 ./Library/MobileSubstrate/DynamicLibraries/
-#      —— 解包后落到 /var/roothide/Library/MobileSubstrate/DynamicLibraries/。
-#   3) 签名用 ldid -M -S<entitlements>（官方做法）。禁止在本机用 Python 手搓
-#      Mach-O 签名——page-hash / superblob 极易写坏，坏签名会被 amfi 在
-#      main() 前直接 SIGKILL（表现为点图标闪退、无 .ips、AppSync 也救不了）。
-#   4) entitlements 必须含 roothide 4 项基础权限 + healthkit 私有权限
-#      （见 HealthBoost.entitlements.plist）。
-# ============================================================================
+# HealthBoost æå»ºèæ¬ï¼roothide èå¼ Â· åä¸ deb åæ¶å?App + tweakï¼?# ----------------------------------------------------------------------------
+# å³é®çº¦å®ï¼æ¥è?roothide å®æ¹ RootHideManagerApp / Developer ææ¡£ï¼ï¼
+#   1) App è£å¨ãæ ¹ç¸å¯¹ã?./Applications/UCS.app
+#      ââ?roothide ççå®æ ¹å°±æ¯ /var/roothideï¼dpkg è§£ååè½å?#         /var/roothide/Applications/UCS.appãç»ä¸è½ç?./var/jb/ æ?#         ./var/roothide/ è¿ç§å¸¦åç¼çè·¯å¾ï¼dpkg ä¼æ¥ No such fileï¼ã?#   2) tweak è£å¨ãæ ¹ç¸å¯¹ã?./Library/MobileSubstrate/DynamicLibraries/
+#      ââ?è§£ååè½å?/var/roothide/Library/MobileSubstrate/DynamicLibraries/ã?#   3) ç­¾åç?ldid -M -S<entitlements>ï¼å®æ¹åæ³ï¼ãç¦æ­¢å¨æ¬æºç?Python ææ
+#      Mach-O ç­¾åââpage-hash / superblob ææååï¼åç­¾åä¼è¢« amfi å?#      main() åç´æ?SIGKILLï¼è¡¨ç°ä¸ºç¹å¾æ éªéãæ  .ipsãAppSync ä¹æä¸äºï¼ã?#   4) entitlements å¿é¡»å?roothide 4 é¡¹åºç¡æé + healthkit ç§ææé
+#      ï¼è§ HealthBoost.entitlements.plistï¼ã?# ============================================================================
 
-# 版本号：v2.2.13（修复：1.未点按钮自动生成 2.后台切换闪退 3.微信第二次同步慢）
-VER="2.2.13"
+# 版本号：v2.2.14（修复：通知点击不触发 + 后台切换闪退根因）
+VER="2.2.14"
 echo "版本号: $VER"
 PKG="com.sykes.ucs"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
 
-echo "[1/5] 创建 staging 目录（roothide 根相对 ./Applications + ./Library）"
+echo "[1/5] åå»º staging ç®å½ï¼roothide æ ¹ç¸å¯?./Applications + ./Libraryï¼?
 rm -rf staging tweak_staging pkg
 mkdir -p staging/Applications/UCS.app
 mkdir -p staging/Library/MobileSubstrate/DynamicLibraries
@@ -34,7 +26,7 @@ mkdir -p tweak_staging/Library/MobileSubstrate/DynamicLibraries
 
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
-echo "[2/5] 编译 iOS App (UCS.app) — arm64 + arm64e"
+echo "[2/5] ç¼è¯ iOS App (UCS.app) â?arm64 + arm64e"
 xcrun --sdk iphoneos clang \
   -framework UIKit \
   -framework Foundation \
@@ -50,7 +42,7 @@ xcrun --sdk iphoneos clang \
 chmod 755 staging/Applications/UCS.app/HealthBoostApp
 echo "  app: $(wc -c < staging/Applications/UCS.app/HealthBoostApp) bytes"
 
-echo "[3/5] 拷贝 App 资源 + ldid 签名"
+echo "[3/5] æ·è´ App èµæº + ldid ç­¾å"
 cp HealthBoostApp/Info.plist  staging/Applications/UCS.app/
 cp HealthBoostApp/HealthBoost/AppIcon60x60@2x.png staging/Applications/UCS.app/
 cp HealthBoostApp/HealthBoost/PkgInfo    staging/Applications/UCS.app/
@@ -59,36 +51,35 @@ chmod 644 staging/Applications/UCS.app/AppIcon60x60@2x.png
 chmod 644 staging/Applications/UCS.app/PkgInfo
 
 if ! command -v ldid >/dev/null 2>&1; then
-  echo "ERROR: ldid 未安装，无法签名，终止构建"
+  echo "ERROR: ldid æªå®è£ï¼æ æ³ç­¾åï¼ç»æ­¢æå»?
   exit 1
 fi
 if [ ! -f HealthBoost.entitlements.plist ]; then
-  echo "ERROR: HealthBoost.entitlements.plist 缺失，终止构建"
+  echo "ERROR: HealthBoost.entitlements.plist ç¼ºå¤±ï¼ç»æ­¢æå»?
   exit 1
 fi
-# -M：先清除已有（可能坏的）签名；-S<file>：用官方 entitlements 重新 ad-hoc 签名
+# -Mï¼åæ¸é¤å·²æï¼å¯è½åçï¼ç­¾åï¼?S<file>ï¼ç¨å®æ¹ entitlements éæ° ad-hoc ç­¾å
 ldid -M -SHealthBoost.entitlements.plist staging/Applications/UCS.app/HealthBoostApp
-echo "  已用 ldid 重签 App"
+echo "  å·²ç¨ ldid éç­¾ App"
 
-# 校验 1：签名必须含 healthkit 权限（否则无法写入健康数据）
+# æ ¡éª 1ï¼ç­¾åå¿é¡»å« healthkit æéï¼å¦åæ æ³åå¥å¥åº·æ°æ®ï¼
 if ! ldid -e staging/Applications/UCS.app/HealthBoostApp 2>/dev/null | grep -q "healthkit"; then
-  echo "ERROR: 签名后未检测到 healthkit 权限，终止构建"
+  echo "ERROR: ç­¾ååæªæ£æµå° healthkit æéï¼ç»æ­¢æå»?
   exit 1
 fi
-# 校验 2：必须含 roothide 基础 no-sandbox 权限
+# æ ¡éª 2ï¼å¿é¡»å« roothide åºç¡ no-sandbox æé
 if ! ldid -e staging/Applications/UCS.app/HealthBoostApp 2>/dev/null | grep -q "no-sandbox"; then
-  echo "ERROR: 签名后未检测到 com.apple.private.security.no-sandbox，App 在 roothide 上会被沙盒限制，终止构建"
+  echo "ERROR: ç­¾ååæªæ£æµå° com.apple.private.security.no-sandboxï¼App å?roothide ä¸ä¼è¢«æ²çéå¶ï¼ç»æ­¢æå»º"
   exit 1
 fi
-# 校验 3：二进制仍是合法 Mach-O（magic 验证）
-magic=$(xxd -p -l4 staging/Applications/UCS.app/HealthBoostApp 2>/dev/null || od -An -tx1 -N4 staging/Applications/UCS.app/HealthBoostApp | tr -d ' \n')
+# æ ¡éª 3ï¼äºè¿å¶ä»æ¯åæ³ Mach-Oï¼magic éªè¯ï¼?magic=$(xxd -p -l4 staging/Applications/UCS.app/HealthBoostApp 2>/dev/null || od -An -tx1 -N4 staging/Applications/UCS.app/HealthBoostApp | tr -d ' \n')
 if [ "$magic" != "cafebabe" ]; then
-  echo "ERROR: 签名后 Mach-O 头异常 (magic=$magic)，终止构建"
+  echo "ERROR: ç­¾åå?Mach-O å¤´å¼å¸?(magic=$magic)ï¼ç»æ­¢æå»?
   exit 1
 fi
-echo "  签名校验通过: healthkit + no-sandbox 均存在，Mach-O 头正常"
+echo "  ç­¾åæ ¡éªéè¿: healthkit + no-sandbox åå­å¨ï¼Mach-O å¤´æ­£å¸?
 
-echo "[4/5] 编译并签名 StepFaker tweak（并入同一 deb）"
+echo "[4/5] ç¼è¯å¹¶ç­¾å?StepFaker tweakï¼å¹¶å¥åä¸ debï¼?
 xcrun --sdk iphoneos clang \
   -dynamiclib -fobjc-arc \
   -framework Foundation -framework CoreFoundation -framework CoreMotion -framework HealthKit \
@@ -105,26 +96,25 @@ chmod 644 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
 
 if command -v ldid >/dev/null 2>&1; then
   ldid -M -S tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
-  echo "  已用 ldid 签名 tweak dylib"
+  echo "  å·²ç¨ ldid ç­¾å tweak dylib"
 else
-  echo "WARN: ldid 不可用，tweak dylib 未签名（roothide 下可能加载失败）"
+  echo "WARN: ldid ä¸å¯ç¨ï¼tweak dylib æªç­¾åï¼roothide ä¸å¯è½å è½½å¤±è´¥ï¼"
 fi
 
-# 校验 dylib 仍是合法 Mach-O（胖二进制 magic=cafebabe）
-smagic=$(xxd -p -l4 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib 2>/dev/null || od -An -tx1 -N4 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib | tr -d ' \n')
+# æ ¡éª dylib ä»æ¯åæ³ Mach-Oï¼èäºè¿å?magic=cafebabeï¼?smagic=$(xxd -p -l4 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib 2>/dev/null || od -An -tx1 -N4 tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib | tr -d ' \n')
 if [ "$smagic" != "cafebabe" ]; then
-  echo "ERROR: tweak dylib Mach-O 头异常 (magic=$smagic)，终止构建"
+  echo "ERROR: tweak dylib Mach-O å¤´å¼å¸?(magic=$smagic)ï¼ç»æ­¢æå»?
   exit 1
 fi
-echo "  tweak 签名校验通过: Mach-O 头正常"
+echo "  tweak ç­¾åæ ¡éªéè¿: Mach-O å¤´æ­£å¸?
 
-echo "  将 tweak 并入主 staging"
+echo "  å°?tweak å¹¶å¥ä¸?staging"
 cp tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
 cp tweak_staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
 chmod 755 staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
 chmod 644 staging/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
 
-echo "[5/5] 生成 control / postinst 并打包（单一 deb）"
+echo "[5/5] çæ control / postinst å¹¶æåï¼åä¸ debï¼?
 cat > staging/DEBIAN/control << EOF
 Package: com.sykes.ucs
 Name: UCS
@@ -134,24 +124,20 @@ Installed-Size: 1152
 Depends: firmware (>= 13.0)
 Maintainer: sykeswzq
 Author: sykeswzq
-Description: UCS - 运动数据注入工具，支持微信步数同步。
-Section: utilities
+Description: UCS - è¿å¨æ°æ®æ³¨å¥å·¥å·ï¼æ¯æå¾®ä¿¡æ­¥æ°åæ­¥ã?Section: utilities
 Priority: optional
 EOF
 
 cat > staging/DEBIAN/postinst << 'EOF'
 #!/bin/sh
-# roothide 上 App 在 /Applications（= /var/roothide/Applications）。
-# 刷新图标缓存，让 SpringBoard 注册这个新 App（uicache -a 全量，再显式补一次路径）。
-if [ -x /var/jb/usr/bin/uicache ]; then
+# roothide ä¸?App å?/Applicationsï¼? /var/roothide/Applicationsï¼ã?# å·æ°å¾æ ç¼å­ï¼è®© SpringBoard æ³¨åè¿ä¸ªæ?Appï¼uicache -a å¨éï¼åæ¾å¼è¡¥ä¸æ¬¡è·¯å¾ï¼ã?if [ -x /var/jb/usr/bin/uicache ]; then
   /var/jb/usr/bin/uicache -a 2>/dev/null || true
   /var/jb/usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
 elif [ -x /usr/bin/uicache ]; then
   /usr/bin/uicache -a 2>/dev/null || true
   /usr/bin/uicache -p /Applications/UCS.app 2>/dev/null || true
 fi
-# 装完强制杀掉微信，让 tweak 在下次启动时加载并读取最新步数。
-for k in /var/jb/bin/killall /usr/bin/killall killall; do
+# è£å®å¼ºå¶ææå¾®ä¿¡ï¼è®?tweak å¨ä¸æ¬¡å¯å¨æ¶å è½½å¹¶è¯»åææ°æ­¥æ°ã?for k in /var/jb/bin/killall /usr/bin/killall killall; do
   if [ -x "$k" ]; then
     "$k" -9 WeChat 2>/dev/null || true
     break

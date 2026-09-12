@@ -33,7 +33,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.2.13</string>
+    <string>2.2.14</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSRequiresIPhoneOS</key>
@@ -41,9 +41,9 @@
     <key>MinimumOSVersion</key>
     <string>13.0</string>
     <key>NSHealthShareUsageDescription</key>
-    <string>UCS 需要访问健康数据以生成运动记录</string>
+    <string>UCS éè¦è®¿é®å¥åº·æ°æ®ä»¥çæè¿å¨è®°å½</string>
     <key>NSHealthUpdateUsageDescription</key>
-    <string>UCS 需要写入健康数据以生成运动记录，并在微信中同步显示步数</string>
+    <string>UCS éè¦åå¥å¥åº·æ°æ®ä»¥çæè¿å¨è®°å½ï¼å¹¶å¨å¾®ä¿¡ä¸­åæ­¥æ¾ç¤ºæ­¥æ°</string>
     <key>UIDeviceFamily</key>
     <array>
         <integer>1</integer>

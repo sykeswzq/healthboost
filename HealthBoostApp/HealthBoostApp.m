@@ -1,8 +1,8 @@
 // HealthBoost - iOS App that writes steps / distance / flights to Apple Health as device source
 
-// 使用 com.apple.private.healthkit.source_override + authorization_bypass 私有权限
+// ä½¿ç¨ com.apple.private.healthkit.source_override + authorization_bypass ç§ææé
 
-// 让写出的 step count 来源伪装成 iPhone 设备源，从而被微信运动等应用读取
+// è®©ååºç step count æ¥æºä¼ªè£æ iPhone è®¾å¤æºï¼ä»èè¢«å¾®ä¿¡è¿å¨ç­åºç¨è¯»å
 
 #import <UIKit/UIKit.h>
 
@@ -18,7 +18,7 @@
 
 
 
-// 前向声明：HBDumpEntitlements 定义在 HBLog 之前，需先声明否则会触发隐式声明错误
+// ååå£°æï¼HBDumpEntitlements å®ä¹å¨ HBLog ä¹åï¼éåå£°æå¦åä¼è§¦åéå¼å£°æéè¯¯
 
 static void HBLog(NSString *fmt, ...);
 
@@ -30,19 +30,19 @@ static NSString * const HBSettingsKey = @"com.sykes.ucs.settings";
 
 // MARK: - Logging helper
 
-// 日志同时写到两个位置：
+// æ¥å¿åæ¶åå°ä¸¤ä¸ªä½ç½®ï¼
 
-//   1) /var/mobile/Media/HealthBoost/hb_log.txt  —— Files App「我的 iPhone」里能直接看到
+//   1) /var/mobile/Media/HealthBoost/hb_log.txt  ââ Files Appãæç iPhoneãéè½ç´æ¥çå°
 
-//   2) App 沙盒 Documents/hb_log.txt              —— 保底，App 内「查看日志」能读
+//   2) App æ²ç Documents/hb_log.txt              ââ ä¿åºï¼App åãæ¥çæ¥å¿ãè½è¯»
 
-// App 带 com.apple.private.security.no-sandbox，可写沙盒外路径。
+// App å¸¦ com.apple.private.security.no-sandboxï¼å¯åæ²çå¤è·¯å¾ã
 
 
 
-// 追加一行到指定路径，并自动裁剪为滚动日志（最多保留 HB_MAX_LOG_LINES 行）
+// è¿½å ä¸è¡å°æå®è·¯å¾ï¼å¹¶èªå¨è£åªä¸ºæ»å¨æ¥å¿ï¼æå¤ä¿ç HB_MAX_LOG_LINES è¡ï¼
 
-// 防止日志无限增长导致 UIPasteboard 复制失败 / 弹窗截断。
+// é²æ­¢æ¥å¿æ éå¢é¿å¯¼è´ UIPasteboard å¤å¶å¤±è´¥ / å¼¹çªæªæ­ã
 
 static const NSInteger HB_MAX_LOG_LINES = 200;
 
@@ -62,7 +62,7 @@ static void HBAppendLine(NSString *path, NSString *line) {
 
 
 
-    // 读取旧日志
+    // è¯»åæ§æ¥å¿
 
     NSString *old = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
 
@@ -72,7 +72,7 @@ static void HBAppendLine(NSString *path, NSString *line) {
 
         [lines addObjectsFromArray:[old componentsSeparatedByString:@"\n"]];
 
-        // 去掉末尾可能存在的空行
+        // å»ææ«å°¾å¯è½å­å¨çç©ºè¡
 
         while (lines.count > 0 && [lines.lastObject length] == 0) {
 
@@ -84,13 +84,13 @@ static void HBAppendLine(NSString *path, NSString *line) {
 
 
 
-    // 追加新行
+    // è¿½å æ°è¡
 
     [lines addObject:line];
 
 
 
-    // 滚动裁剪：保留最后 HB_MAX_LOG_LINES 行
+    // æ»å¨è£åªï¼ä¿çæå HB_MAX_LOG_LINES è¡
 
     while (lines.count > HB_MAX_LOG_LINES) {
 
@@ -100,7 +100,7 @@ static void HBAppendLine(NSString *path, NSString *line) {
 
 
 
-    // 写回
+    // åå
 
     NSString *out = [lines componentsJoinedByString:@"\n"];
 
@@ -112,7 +112,7 @@ static void HBAppendLine(NSString *path, NSString *line) {
 
 
 
-// 外部共享日志路径（Files App 可见）
+// å¤é¨å±äº«æ¥å¿è·¯å¾ï¼Files App å¯è§ï¼
 
 static NSString *HBSharedLogPath(void) {
 
@@ -122,9 +122,9 @@ static NSString *HBSharedLogPath(void) {
 
 
 
-// API 探测输出路径：把 HealthKit 相关类的全部方法（含私有）导出到这里，
+// API æ¢æµè¾åºè·¯å¾ï¼æ HealthKit ç¸å³ç±»çå¨é¨æ¹æ³ï¼å«ç§æï¼å¯¼åºå°è¿éï¼
 
-// 用于定位真正能改写 sample 来源的私有初始化器 / 保存入口。
+// ç¨äºå®ä½çæ­£è½æ¹å sample æ¥æºçç§æåå§åå¨ / ä¿å­å¥å£ã
 
 static NSString *HBAPIDumpPath(void) {
 
@@ -134,7 +134,7 @@ static NSString *HBAPIDumpPath(void) {
 
 
 
-// 枚举某个类的所有实例方法（含私有），追加到 out
+// æä¸¾æä¸ªç±»çææå®ä¾æ¹æ³ï¼å«ç§æï¼ï¼è¿½å å° out
 
 static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NSArray *keywords) {
 
@@ -152,7 +152,7 @@ static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NS
 
         NSString *sn = [NSString stringWithUTF8String:name];
 
-        // 若给了关键字，只输出命中的；否则全输出
+        // è¥ç»äºå³é®å­ï¼åªè¾åºå½ä¸­çï¼å¦åå¨è¾åº
 
         BOOL hit = (keywords == nil);
 
@@ -164,7 +164,7 @@ static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NS
 
         if (hit) {
 
-            // 附带参数个数与方法签名，便于安全构造 NSInvocation
+            // éå¸¦åæ°ä¸ªæ°ä¸æ¹æ³ç­¾åï¼ä¾¿äºå®å¨æé  NSInvocation
 
             unsigned int nargs = method_getNumberOfArguments(methods[i]);
 
@@ -184,21 +184,21 @@ static void HBDumpMethods(NSMutableString *out, Class cls, NSString *clsName, NS
 
 
 
-// 把步数写到「供微信 tweak 读取」的通道。
+// ææ­¥æ°åå°ãä¾å¾®ä¿¡ tweak è¯»åãçééã
 
-// 双通道（v76 起）：
+// åééï¼v76 èµ·ï¼ï¼
 
-//   1) 文件 /var/mobile/Media/HealthBoost/hb_steps.txt —— 真实共享路径，roothide 下最稳，
+//   1) æä»¶ /var/mobile/Media/HealthBoost/hb_steps.txt ââ çå®å±äº«è·¯å¾ï¼roothide ä¸æç¨³ï¼
 
-//      微信进程里的 tweak 直接读这个文件。这是主通道。
+//      å¾®ä¿¡è¿ç¨éç tweak ç´æ¥è¯»è¿ä¸ªæä»¶ãè¿æ¯ä¸»ééã
 
-//   2) CFPreferences com.apple.mobile.healthboost —— 兜底。
+//   2) CFPreferences com.apple.mobile.healthboost ââ ååºã
 
-// 这一步与写 HealthKit 是两条独立链路：HealthKit 管「健康」App，这里管「微信运动」。
+// è¿ä¸æ­¥ä¸å HealthKit æ¯ä¸¤æ¡ç¬ç«é¾è·¯ï¼HealthKit ç®¡ãå¥åº·ãAppï¼è¿éç®¡ãå¾®ä¿¡è¿å¨ãã
 
-// 步数文件统一格式：第一行数字，第二行 date:YYYY-MM-DD（v1.0.201 起必带）。
+// æ­¥æ°æä»¶ç»ä¸æ ¼å¼ï¼ç¬¬ä¸è¡æ°å­ï¼ç¬¬äºè¡ date:YYYY-MM-DDï¼v1.0.201 èµ·å¿å¸¦ï¼ã
 
-// tweak 端据此做「今天」校验，昨天的残留值不再被微信读走。
+// tweak ç«¯æ®æ­¤åãä»å¤©ãæ ¡éªï¼æ¨å¤©çæ®çå¼ä¸åè¢«å¾®ä¿¡è¯»èµ°ã
 
 static NSString *HBFakeDateLine(void) {
 
@@ -230,23 +230,23 @@ static void HBWriteStepsFile(long steps) {
 
     BOOL ok = [content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
-    HBLog(@"[HealthBoost] 已写入步数文件 %ld (file=%d) @ %@", steps, ok, path);
+    HBLog(@"[HealthBoost] å·²åå¥æ­¥æ°æä»¶ %ld (file=%d) @ %@", steps, ok, path);
 
 }
 
 
 
-// 找到微信相关进程的数据容器路径。
+// æ¾å°å¾®ä¿¡ç¸å³è¿ç¨çæ°æ®å®¹å¨è·¯å¾ã
 
-// 原理：微信是 App Store 应用，跑在沙盒里，**读不到** /var/mobile/Media/ 下的文件。
+// åçï¼å¾®ä¿¡æ¯ App Store åºç¨ï¼è·å¨æ²çéï¼**è¯»ä¸å°** /var/mobile/Media/ ä¸çæä»¶ã
 
-// 但本 App 带 no-sandbox 权限，可以直接把步数文件写进它们自己的容器，
+// ä½æ¬ App å¸¦ no-sandbox æéï¼å¯ä»¥ç´æ¥ææ­¥æ°æä»¶åè¿å®ä»¬èªå·±çå®¹å¨ï¼
 
-// 各自进程对自己容器内的文件是必定可读的 —— 这是绕开沙盒最可靠的通道。
+// åèªè¿ç¨å¯¹èªå·±å®¹å¨åçæä»¶æ¯å¿å®å¯è¯»ç ââ è¿æ¯ç»å¼æ²çæå¯é çééã
 
-// iOS 在每个数据容器根目录放 .com.apple.mobile_container_manager.metadata.plist，
+// iOS å¨æ¯ä¸ªæ°æ®å®¹å¨æ ¹ç®å½æ¾ .com.apple.mobile_container_manager.metadata.plistï¼
 
-// 里面的 MCMMetadataIdentifier 就是该容器对应的 bundle id。
+// éé¢ç MCMMetadataIdentifier å°±æ¯è¯¥å®¹å¨å¯¹åºç bundle idã
 
 static NSArray<NSString *> *HBWeChatContainerPaths(void) {
 
@@ -258,7 +258,7 @@ static NSArray<NSString *> *HBWeChatContainerPaths(void) {
 
     if (!dirs) {
 
-        HBLog(@"[HealthBoost] 容器扫描失败: /var/mobile/Containers/Data/Application 不可读");
+        HBLog(@"[HealthBoost] å®¹å¨æ«æå¤±è´¥: /var/mobile/Containers/Data/Application ä¸å¯è¯»");
 
         return @[];
 
@@ -274,9 +274,9 @@ static NSArray<NSString *> *HBWeChatContainerPaths(void) {
 
         NSString *ident = dict[@"MCMMetadataIdentifier"];
 
-        // 主微信、步数进程 UGGD，以及所有微信插件/扩展容器都覆盖，
+        // ä¸»å¾®ä¿¡ãæ­¥æ°è¿ç¨ UGGDï¼ä»¥åææå¾®ä¿¡æä»¶/æ©å±å®¹å¨é½è¦çï¼
 
-        // 避免因为猜错「到底哪个进程在读步数」而漏掉真正的目标。
+        // é¿åå ä¸ºçéãå°åºåªä¸ªè¿ç¨å¨è¯»æ­¥æ°ãèæ¼æçæ­£çç®æ ã
 
         if ([ident isEqualToString:@"com.tencent.xin"] ||
 
@@ -286,7 +286,7 @@ static NSArray<NSString *> *HBWeChatContainerPaths(void) {
 
             [out addObject:[base stringByAppendingPathComponent:d]];
 
-            HBLog(@"[HealthBoost] 找到微信相关容器: %@ -> %@", ident, d);
+            HBLog(@"[HealthBoost] æ¾å°å¾®ä¿¡ç¸å³å®¹å¨: %@ -> %@", ident, d);
 
         }
 
@@ -298,9 +298,9 @@ static NSArray<NSString *> *HBWeChatContainerPaths(void) {
 
 
 
-// 无沙盒的守护进程（比如 UGGD）可能根本没有数据容器，
+// æ æ²ççå®æ¤è¿ç¨ï¼æ¯å¦ UGGDï¼å¯è½æ ¹æ¬æ²¡ææ°æ®å®¹å¨ï¼
 
-// 此时它的可写落点是 /var/mobile/Documents。这里一并写一份兜底。
+// æ­¤æ¶å®çå¯åè½ç¹æ¯ /var/mobile/Documentsãè¿éä¸å¹¶åä¸ä»½ååºã
 
 static NSInteger HBWriteStepsToVarMobileDocuments(long steps) {
 
@@ -322,7 +322,7 @@ static NSInteger HBWriteStepsToVarMobileDocuments(long steps) {
 
     if (ok) [fm setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
 
-    HBLog(@"[HealthBoost] 写入 /var/mobile/Documents/hb_steps.txt (ok=%d) —— 供无容器守护进程读取", ok);
+    HBLog(@"[HealthBoost] åå¥ /var/mobile/Documents/hb_steps.txt (ok=%d) ââ ä¾æ å®¹å¨å®æ¤è¿ç¨è¯»å", ok);
 
     return ok ? 1 : 0;
 
@@ -330,11 +330,11 @@ static NSInteger HBWriteStepsToVarMobileDocuments(long steps) {
 
 
 
-// ②d roothide 修复：把步数写到 UCS App 自身容器 Documents。roothide 应用的自身容器
+// â¡d roothide ä¿®å¤ï¼ææ­¥æ°åå° UCS App èªèº«å®¹å¨ Documentsãroothide åºç¨çèªèº«å®¹å¨
 
-// 由系统重映射到 /var/roothide/var/mobile/Containers/.../Documents，与 tweak 端
+// ç±ç³»ç»éæ å°å° /var/roothide/var/mobile/Containers/.../Documentsï¼ä¸ tweak ç«¯
 
-// 枚举 com.sykes.ucs.app 容器读取的路径完全一致，是最稳的跨进程通道（不依赖 /var/mobile 重映射）。
+// æä¸¾ com.sykes.ucs.app å®¹å¨è¯»åçè·¯å¾å®å¨ä¸è´ï¼æ¯æç¨³çè·¨è¿ç¨ééï¼ä¸ä¾èµ /var/mobile éæ å°ï¼ã
 
 static NSInteger HBWriteStepsToOwnContainer(long steps) {
 
@@ -348,7 +348,7 @@ static NSInteger HBWriteStepsToOwnContainer(long steps) {
 
     NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
 
-    // v2.2.6：写之前先删旧文件，打破缓存，确保微信能读到最新值
+    // v2.2.6ï¼åä¹ååå æ§æä»¶ï¼æç ´ç¼å­ï¼ç¡®ä¿å¾®ä¿¡è½è¯»å°ææ°å¼
     if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
 
     NSString *content = [NSString stringWithFormat:@"%ld\n%@\n", steps, HBFakeDateLine()];
@@ -357,7 +357,7 @@ static NSInteger HBWriteStepsToOwnContainer(long steps) {
 
     if (ok) [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:path error:nil];
 
-    HBLog(@"[HealthBoost] 写入自身容器步数文件 (ok=%d) @ %@", ok, path);
+    HBLog(@"[HealthBoost] åå¥èªèº«å®¹å¨æ­¥æ°æä»¶ (ok=%d) @ %@", ok, path);
 
     return ok ? 1 : 0;
 
@@ -365,7 +365,7 @@ static NSInteger HBWriteStepsToOwnContainer(long steps) {
 
 
 
-// 把步数写进微信自己的容器（沙盒内可读），这是 v78 的主通道。
+// ææ­¥æ°åè¿å¾®ä¿¡èªå·±çå®¹å¨ï¼æ²çåå¯è¯»ï¼ï¼è¿æ¯ v78 çä¸»ééã
 
 static NSInteger HBWriteStepsToWeChatContainers(long steps) {
 
@@ -373,7 +373,7 @@ static NSInteger HBWriteStepsToWeChatContainers(long steps) {
 
     if (containers.count == 0) {
 
-        HBLog(@"[HealthBoost] 警告: 未找到微信容器，步数无法传给微信（微信可能未安装）");
+        HBLog(@"[HealthBoost] è­¦å: æªæ¾å°å¾®ä¿¡å®¹å¨ï¼æ­¥æ°æ æ³ä¼ ç»å¾®ä¿¡ï¼å¾®ä¿¡å¯è½æªå®è£ï¼");
 
         return 0;
 
@@ -397,11 +397,11 @@ static NSInteger HBWriteStepsToWeChatContainers(long steps) {
 
         NSString *path = [doc stringByAppendingPathComponent:@"hb_steps.txt"];
 
-        // v1.0.161：写之前先删旧文件，避免残留脏值（如早期测试写下的 99999）覆盖不彻底
+        // v1.0.161ï¼åä¹ååå æ§æä»¶ï¼é¿åæ®çèå¼ï¼å¦æ©ææµè¯åä¸ç 99999ï¼è¦çä¸å½»åº
 
         if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
 
-        // 用 NSData 写并设 0644，确保微信进程（mobile 用户）可读
+        // ç¨ NSData åå¹¶è®¾ 0644ï¼ç¡®ä¿å¾®ä¿¡è¿ç¨ï¼mobile ç¨æ·ï¼å¯è¯»
 
         BOOL ok = [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
 
@@ -413,7 +413,7 @@ static NSInteger HBWriteStepsToWeChatContainers(long steps) {
 
         }
 
-        HBLog(@"[HealthBoost] 写入容器步数 %ld -> %@ (ok=%d)", steps, path, ok);
+        HBLog(@"[HealthBoost] åå¥å®¹å¨æ­¥æ° %ld -> %@ (ok=%d)", steps, path, ok);
 
     }
 
@@ -425,29 +425,29 @@ static NSInteger HBWriteStepsToWeChatContainers(long steps) {
 
 static void HBWriteStepsPreference(long steps) {
 
-    // v1.0.159：诊断增强——把"到底写了什么值到哪"打印出来，定位 99999 来源
+    // v1.0.159ï¼è¯æ­å¢å¼ºââæ"å°åºåäºä»ä¹å¼å°åª"æå°åºæ¥ï¼å®ä½ 99999 æ¥æº
 
-    HBLog(@"[HealthBoost] >> 即将写入步数值 steps=%ld", steps);
+    HBLog(@"[HealthBoost] >> å³å°åå¥æ­¥æ°å¼ steps=%ld", steps);
 
-    // 通道1（最可靠）：写进微信相关容器，沙盒内必定可读
+    // éé1ï¼æå¯é ï¼ï¼åè¿å¾®ä¿¡ç¸å³å®¹å¨ï¼æ²çåå¿å®å¯è¯»
 
     NSInteger nContainers = HBWriteStepsToWeChatContainers(steps);
 
-    // 通道1b：无容器守护进程（UGGD）的兜底落点
+    // éé1bï¼æ å®¹å¨å®æ¤è¿ç¨ï¼UGGDï¼çååºè½ç¹
 
     NSInteger nVarMobile = HBWriteStepsToVarMobileDocuments(steps);
 
-    // 通道1c：roothide 修复 —— 写进 UCS App 自身容器（与 tweak ②c 读取对应）
+    // éé1cï¼roothide ä¿®å¤ ââ åè¿ UCS App èªèº«å®¹å¨ï¼ä¸ tweak â¡c è¯»åå¯¹åºï¼
 
     NSInteger nOwn = HBWriteStepsToOwnContainer(steps);
 
-    // 通道2：共享 Media 目录（仅对无沙盒进程有效）
+    // éé2ï¼å±äº« Media ç®å½ï¼ä»å¯¹æ æ²çè¿ç¨ææï¼
 
     HBWriteStepsFile(steps);
 
-    // 通道3：CFPreferences 系统域（UCStep 同款跨沙盒手法）+ stepsDate 供 tweak 校验「今天」
+    // éé3ï¼CFPreferences ç³»ç»åï¼UCStep åæ¬¾è·¨æ²çææ³ï¼+ stepsDate ä¾ tweak æ ¡éªãä»å¤©ã
 
-    NSString *todayStr = HBFakeDateLine();   // 形如 date:2026-09-04
+    NSString *todayStr = HBFakeDateLine();   // å½¢å¦ date:2026-09-04
 
     CFPreferencesSetValue(CFSTR("steps"),
 
@@ -475,7 +475,7 @@ static void HBWriteStepsPreference(long steps) {
 
                                        kCFPreferencesAnyHost);
 
-    HBLog(@"[HealthBoost] 步数通道写入完成: 容器=%ld 自身容器=%ld varMobile=%ld Media=1 偏好sync=%d 写入值=%ld",
+    HBLog(@"[HealthBoost] æ­¥æ°ééåå¥å®æ: å®¹å¨=%ld èªèº«å®¹å¨=%ld varMobile=%ld Media=1 åå¥½sync=%d åå¥å¼=%ld",
 
           (long)nContainers, (long)nOwn, (long)nVarMobile, ok, steps);
 
@@ -483,9 +483,9 @@ static void HBWriteStepsPreference(long steps) {
 
 
 
-// 清除所有「供微信读取」的步数假数据，让微信恢复读取真实步数。
+// æ¸é¤ææãä¾å¾®ä¿¡è¯»åãçæ­¥æ°åæ°æ®ï¼è®©å¾®ä¿¡æ¢å¤è¯»åçå®æ­¥æ°ã
 
-// 在用户关闭「每日自动生成」时调用：既然不再自动生成，就不应继续伪造。
+// å¨ç¨æ·å³é­ãæ¯æ¥èªå¨çæãæ¶è°ç¨ï¼æ¢ç¶ä¸åèªå¨çæï¼å°±ä¸åºç»§ç»­ä¼ªé ã
 
 static void HBClearStepsFiles(void) {
 
@@ -501,7 +501,7 @@ static void HBClearStepsFiles(void) {
 
             [fm removeItemAtPath:path error:nil];
 
-            HBLog(@"[HealthBoost] 已清除容器步数文件: %@", path);
+            HBLog(@"[HealthBoost] å·²æ¸é¤å®¹å¨æ­¥æ°æä»¶: %@", path);
 
         }
 
@@ -509,11 +509,11 @@ static void HBClearStepsFiles(void) {
 
     NSString *varDoc = @"/var/mobile/Documents/hb_steps.txt";
 
-    if ([fm fileExistsAtPath:varDoc]) { [fm removeItemAtPath:varDoc error:nil]; HBLog(@"[HealthBoost] 已清除 /var/mobile/Documents/hb_steps.txt"); }
+    if ([fm fileExistsAtPath:varDoc]) { [fm removeItemAtPath:varDoc error:nil]; HBLog(@"[HealthBoost] å·²æ¸é¤ /var/mobile/Documents/hb_steps.txt"); }
 
     NSString *media = @"/var/mobile/Media/HealthBoost/hb_steps.txt";
 
-    if ([fm fileExistsAtPath:media]) { [fm removeItemAtPath:media error:nil]; HBLog(@"[HealthBoost] 已清除 /var/mobile/Media/HealthBoost/hb_steps.txt"); }
+    if ([fm fileExistsAtPath:media]) { [fm removeItemAtPath:media error:nil]; HBLog(@"[HealthBoost] å·²æ¸é¤ /var/mobile/Media/HealthBoost/hb_steps.txt"); }
 
     CFPreferencesSetValue(CFSTR("steps"), NULL, CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
 
@@ -521,17 +521,17 @@ static void HBClearStepsFiles(void) {
 
     CFPreferencesSynchronize(CFSTR("com.apple.mobile.healthboost"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
 
-    HBLog(@"[HealthBoost] 已清空 CFPreferences 步数，微信恢复真实步数");
+    HBLog(@"[HealthBoost] å·²æ¸ç©º CFPreferences æ­¥æ°ï¼å¾®ä¿¡æ¢å¤çå®æ­¥æ°");
 
 }
 
 
 
-// 扫描所有数据容器，收集 tweak 写下的诊断日志。
+// æ«ææææ°æ®å®¹å¨ï¼æ¶é tweak åä¸çè¯æ­æ¥å¿ã
 
-// tweak 跑在微信沙盒里，写不了 /var/mobile/Media/，只能写自己容器的 Documents。
+// tweak è·å¨å¾®ä¿¡æ²çéï¼åä¸äº /var/mobile/Media/ï¼åªè½åèªå·±å®¹å¨ç Documentsã
 
-// 本 App 无沙盒，可以遍历所有容器把它读回来。
+// æ¬ App æ æ²çï¼å¯ä»¥éåææå®¹å¨æå®è¯»åæ¥ã
 
 static NSString *HBCollectTweakLogs(void) {
 
@@ -541,7 +541,7 @@ static NSString *HBCollectTweakLogs(void) {
 
 
 
-    // 1) 共享位置（若 tweak 所在进程无沙盒，日志会在这里）
+    // 1) å±äº«ä½ç½®ï¼è¥ tweak æå¨è¿ç¨æ æ²çï¼æ¥å¿ä¼å¨è¿éï¼
 
     NSString *shared = [NSString stringWithContentsOfFile:@"/var/mobile/Media/HealthBoost/tweak_log.txt"
 
@@ -559,7 +559,7 @@ static NSString *HBCollectTweakLogs(void) {
 
 
 
-    // 2) 遍历所有数据容器的 Documents/hb_tweak_log.txt
+    // 2) éåæææ°æ®å®¹å¨ç Documents/hb_tweak_log.txt
 
     NSString *base = @"/var/mobile/Containers/Data/Application";
 
@@ -587,7 +587,7 @@ static NSString *HBCollectTweakLogs(void) {
 
             found++;
 
-            [out appendFormat:@"--- 容器日志 [%@] ---\n%@\n", ident, c];
+            [out appendFormat:@"--- å®¹å¨æ¥å¿ [%@] ---\n%@\n", ident, c];
 
         }
 
@@ -597,15 +597,15 @@ static NSString *HBCollectTweakLogs(void) {
 
     if (out.length == 0) {
 
-        return @"（未找到任何 tweak 日志）\n"
+        return @"ï¼æªæ¾å°ä»»ä½ tweak æ¥å¿ï¼\n"
 
-               @"可能原因：\n"
+               @"å¯è½åå ï¼\n"
 
-               @"  1. tweak 未被注入 —— 装完 deb 后必须彻底杀掉微信再重开；\n"
+               @"  1. tweak æªè¢«æ³¨å¥ ââ è£å® deb åå¿é¡»å½»åºææå¾®ä¿¡åéå¼ï¼\n"
 
-               @"  2. 微信/UGGD 进程还没重启过；\n"
+               @"  2. å¾®ä¿¡/UGGD è¿ç¨è¿æ²¡éå¯è¿ï¼\n"
 
-               @"  3. 注入器（ElleKit/Substrate）未加载本 tweak。\n";
+               @"  3. æ³¨å¥å¨ï¼ElleKit/Substrateï¼æªå è½½æ¬ tweakã\n";
 
     }
 
@@ -617,13 +617,13 @@ static NSString *HBCollectTweakLogs(void) {
 
 
 
-// 读取自身 entitlements 的实际生效值
+// è¯»åèªèº« entitlements çå®éçæå¼
 
-// 目的：确认 ldid 签的 com.apple.private.healthkit.source_override 到底有没有被系统认可。
+// ç®çï¼ç¡®è®¤ ldid ç­¾ç com.apple.private.healthkit.source_override å°åºææ²¡æè¢«ç³»ç»è®¤å¯ã
 
-// 注意：SecTask 系列在 iOS SDK 中没有公开头文件（属 macOS 私有 API），
+// æ³¨æï¼SecTask ç³»åå¨ iOS SDK ä¸­æ²¡æå¬å¼å¤´æä»¶ï¼å± macOS ç§æ APIï¼ï¼
 
-// 这里用 dlsym 运行时查找，找不到就跳过，避免编译/链接失败或运行时崩溃。
+// è¿éç¨ dlsym è¿è¡æ¶æ¥æ¾ï¼æ¾ä¸å°å°±è·³è¿ï¼é¿åç¼è¯/é¾æ¥å¤±è´¥æè¿è¡æ¶å´©æºã
 
 static void HBDumpEntitlements(void) {
 
@@ -631,7 +631,7 @@ static void HBDumpEntitlements(void) {
 
     if (!sec) {
 
-        HBLog(@"[HealthBoost] ENT: Security.framework 加载失败");
+        HBLog(@"[HealthBoost] ENT: Security.framework å è½½å¤±è´¥");
 
         return;
 
@@ -653,7 +653,7 @@ static void HBDumpEntitlements(void) {
 
     if (!hbSecTaskCreateFromSelf || !hbSecTaskCopyValueForEntitlement) {
 
-        HBLog(@"[HealthBoost] ENT: SecTask 符号不可用（iOS 未导出），跳过检查");
+        HBLog(@"[HealthBoost] ENT: SecTask ç¬¦å·ä¸å¯ç¨ï¼iOS æªå¯¼åºï¼ï¼è·³è¿æ£æ¥");
 
         return;
 
@@ -665,7 +665,7 @@ static void HBDumpEntitlements(void) {
 
     if (!task) {
 
-        HBLog(@"[HealthBoost] ENT: SecTaskCreateFromSelf 返回 NULL");
+        HBLog(@"[HealthBoost] ENT: SecTaskCreateFromSelf è¿å NULL");
 
         return;
 
@@ -701,7 +701,7 @@ static void HBDumpEntitlements(void) {
 
         } else {
 
-            HBLog(@"[HealthBoost] ENT %@ = (nil 未生效)", k);
+            HBLog(@"[HealthBoost] ENT %@ = (nil æªçæ)", k);
 
         }
 
@@ -713,17 +713,17 @@ static void HBDumpEntitlements(void) {
 
 
 
-// 导出 API 清单到共享目录（不受日志行数限制）
+// å¯¼åº API æ¸åå°å±äº«ç®å½ï¼ä¸åæ¥å¿è¡æ°éå¶ï¼
 
 static void HBDumpHealthKitAPIs(void) {
 
     NSMutableString *out = [NSMutableString string];
 
-    [out appendString:@"=== HealthKit 私有 API 探测 ===\n\n"];
+    [out appendString:@"=== HealthKit ç§æ API æ¢æµ ===\n\n"];
 
 
 
-    // 只关心与「来源 / 初始化 / 保存」相关的方法，避免文件过大
+    // åªå³å¿ä¸ãæ¥æº / åå§å / ä¿å­ãç¸å³çæ¹æ³ï¼é¿åæä»¶è¿å¤§
 
     NSArray *kws = @[@"init", @"source", @"save", @"revision", @"device", @"insert", @"add", @"origin"];
 
@@ -753,13 +753,13 @@ static void HBDumpHealthKitAPIs(void) {
 
 
 
-    [out appendString:@"\n--- HKHealthStore (save/delete 相关) ---\n"];
+    [out appendString:@"\n--- HKHealthStore (save/delete ç¸å³) ---\n"];
 
     HBDumpMethods(out, [HKHealthStore class], @"HKHealthStore", @[@"save", @"delete", @"insert", @"add"]);
 
 
 
-    [out appendString:@"\n--- HKQuantitySample 全部方法 ---\n"];
+    [out appendString:@"\n--- HKQuantitySample å¨é¨æ¹æ³ ---\n"];
 
     HBDumpMethods(out, [HKQuantitySample class], @"HKQuantitySample", nil);
 
@@ -781,7 +781,7 @@ static void HBDumpHealthKitAPIs(void) {
 
 
 
-// 沙盒内日志路径（保底）
+// æ²çåæ¥å¿è·¯å¾ï¼ä¿åºï¼
 
 static NSString *HBSandboxLogPath(void) {
 
@@ -853,7 +853,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
     if (!sample) return nil;
 
-    // KVC 注入私有 ivar _sourceRevision，让 healthd 接受设备源
+    // KVC æ³¨å¥ç§æ ivar _sourceRevisionï¼è®© healthd æ¥åè®¾å¤æº
 
     if (deviceSourceRev) {
 
@@ -865,7 +865,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
             (void)e;
 
-            // 回退：不注入 sourceRevision
+            // åéï¼ä¸æ³¨å¥ sourceRevision
 
         }
 
@@ -877,7 +877,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
 
 
-// MARK: - Main View Controller (UCS：今日数据 / 操作 / 定时生成)
+// MARK: - Main View Controller (UCSï¼ä»æ¥æ°æ® / æä½ / å®æ¶çæ)
 
 
 
@@ -887,7 +887,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
 @property (assign, nonatomic) long flights;
 
-@property (assign, nonatomic) double ratio;        // 步距系数 0.5~0.8，用于推算距离
+@property (assign, nonatomic) double ratio;        // æ­¥è·ç³»æ° 0.5~0.8ï¼ç¨äºæ¨ç®è·ç¦»
 
 @property (assign, nonatomic) BOOL enabled;
 
@@ -947,6 +947,8 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
     self.tableView.tableFooterView = self.statusLabel;
 
+    // v2.2.14ï¼æ è®°Appå¯å¨æ¶å¤äºåå°ç¶æï¼ä½¿éç¥ç¹å»å¯è§¦åçæ
+    self.appWasActiveWhenStarted = YES;
 
 
     [self loadSettings];
@@ -955,30 +957,31 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
     if (self.scheduleOn) [self scheduleDailyNotification];
 
-    HBLog(@"[UCS] App 启动");
+    HBLog(@"[UCS] App å¯å¨");
 
 }
 
 - (void)applicationWillResignActive:(UIApplication *)application {
-    // 应用即将进入后台/锁屏：重置 busy，防止后台异步回调访问已释放的 self
+    // åºç¨å³å°è¿å¥åå°/éå±ï¼éç½® busyï¼é²æ­¢åå°å¼æ­¥åè°è®¿é®å·²éæ¾ç self
     self.busy = NO;
     self.appWasActiveWhenStarted = NO;
-    HBLog(@"[UCS] applicationWillResignActive: 重置 busy");
+    HBLog(@"[UCS] applicationWillResignActive: éç½® busy");
 }
 
 - (void)applicationDidBecomeActive:(UIApplication *)application {
-    // 应用回到前台：刷新设置，检查是否需要补生成
+    // åºç¨åå°åå°ï¼å·æ°è®¾ç½®ï¼æ è®°åå°ç¶æï¼æ£æ¥æ¯å¦éè¦è¡¥çæ
+    self.appWasActiveWhenStarted = YES;
     [self loadSettings];
     if (self.scheduleOn) {
         NSString *today = HBTodayString();
         NSString *lastGen = [NSString stringWithContentsOfFile:HBLastGenPath() encoding:NSUTF8StringEncoding error:nil];
         if (lastGen.length == 0 || ![lastGen isEqualToString:today]) {
-            // 今天还没生成过，且时间已过
+            // ä»å¤©è¿æ²¡çæè¿ï¼ä¸æ¶é´å·²è¿
             NSDate *now = [NSDate date];
             NSDateComponents *comps = [[NSCalendar currentCalendar] components:NSCalendarUnitHour|NSCalendarUnitMinute fromDate:now];
             if (comps.hour > self.schedHour || (comps.hour == self.schedHour && comps.minute >= self.schedMinute)) {
-                // 时间已过，需要补生成
-                HBLog(@"[UCS] 回到前台发现今天未生成，触发补生成");
+                // æ¶é´å·²è¿ï¼éè¦è¡¥çæ
+                HBLog(@"[UCS] åå°åå°åç°ä»å¤©æªçæï¼è§¦åè¡¥çæ");
                 [self generateNow];
             }
         }
@@ -988,7 +991,7 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
 
 
-// 最后生成日期记录（App 沙盒 Documents/hb_lastgen.txt，内容为 YYYY-MM-DD）
+// æåçææ¥æè®°å½ï¼App æ²ç Documents/hb_lastgen.txtï¼åå®¹ä¸º YYYY-MM-DDï¼
 
 static NSString *HBLastGenPath(void) {
 
@@ -1012,11 +1015,11 @@ static NSString *HBTodayString(void) {
 
 
 
-// v1.0.205 修复「每次打开都弹授权框」：
+// v1.0.205 ä¿®å¤ãæ¯æ¬¡æå¼é½å¼¹æææ¡ãï¼
 
-// 问题根因：每次启动都调用 requestAuthorization，系统重复弹窗。
+// é®é¢æ ¹å ï¼æ¯æ¬¡å¯å¨é½è°ç¨ requestAuthorizationï¼ç³»ç»éå¤å¼¹çªã
 
-// 修复方案：用文件持久化标记（跨重启保留），仅首次请求授权。
+// ä¿®å¤æ¹æ¡ï¼ç¨æä»¶æä¹åæ è®°ï¼è·¨éå¯ä¿çï¼ï¼ä»é¦æ¬¡è¯·æ±ææã
 
 static NSString * const HBNotifFailCountKey = @"hb_notif_fail_count";
 
@@ -1024,17 +1027,17 @@ static NSString * const HBNotifFlagFile = @"/var/mobile/Documents/.hb_notif_requ
 
 
 
-// 检查是否已请求过通知权限（文件持久化，比NSUserDefaults更可靠）
+// æ£æ¥æ¯å¦å·²è¯·æ±è¿éç¥æéï¼æä»¶æä¹åï¼æ¯NSUserDefaultsæ´å¯é ï¼
 
 static BOOL HBHasRequestedNotification(void) {
 
     NSFileManager *fm = [NSFileManager defaultManager];
 
-    // 先查文件（最可靠）
+    // åæ¥æä»¶ï¼æå¯é ï¼
 
     if ([fm fileExistsAtPath:HBNotifFlagFile]) return YES;
 
-    // 再查UserDefaults（辅助）
+    // åæ¥UserDefaultsï¼è¾å©ï¼
 
     BOOL defaultsVal = [[NSUserDefaults standardUserDefaults] boolForKey:HBNotifRequestedKey];
 
@@ -1044,17 +1047,17 @@ static BOOL HBHasRequestedNotification(void) {
 
 
 
-// 标记已请求通知权限（写文件 + UserDefaults双重保障）
+// æ è®°å·²è¯·æ±éç¥æéï¼åæä»¶ + UserDefaultsåéä¿éï¼
 
 static void HBMarkNotificationRequested(void) {
 
     NSFileManager *fm = [NSFileManager defaultManager];
 
-    // 写标记文件到用户Documents（roothide下可写）
+    // åæ è®°æä»¶å°ç¨æ·Documentsï¼roothideä¸å¯åï¼
 
     [fm createFileAtPath:HBNotifFlagFile contents:nil attributes:nil];
 
-    // 同步UserDefaults
+    // åæ­¥UserDefaults
 
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:HBNotifRequestedKey];
 
@@ -1074,11 +1077,11 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     
 
-    // 检查是否已经请求过授权（文件持久化，跨重启保留）
+    // æ£æ¥æ¯å¦å·²ç»è¯·æ±è¿ææï¼æä»¶æä¹åï¼è·¨éå¯ä¿çï¼
 
     if (HBHasRequestedNotification()) {
 
-        HBLog(@"[UCS] 通知权限已请求过，跳过弹窗");
+        HBLog(@"[UCS] éç¥æéå·²è¯·æ±è¿ï¼è·³è¿å¼¹çª");
 
         return;
 
@@ -1086,13 +1089,13 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     
 
-    // 直接请求授权
+    // ç´æ¥è¯·æ±ææ
 
     [c requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound|UNAuthorizationOptionBadge
 
                     completionHandler:^(BOOL g, NSError *e){
 
-        // 标记已请求（无论成功失败）
+        // æ è®°å·²è¯·æ±ï¼æ è®ºæåå¤±è´¥ï¼
 
         HBMarkNotificationRequested();
 
@@ -1100,7 +1103,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
         if (g) {
 
-            HBLog(@"[UCS] 通知授权成功");
+            HBLog(@"[UCS] éç¥æææå");
 
             [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:HBNotifFailCountKey];
 
@@ -1114,13 +1117,13 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             [[NSUserDefaults standardUserDefaults] synchronize];
 
-            HBLog(@"[UCS] 通知授权失败 attempt=%ld err=%@", (long)failCount, e ? e.localizedDescription : @"nil");
+            HBLog(@"[UCS] éç¥ææå¤±è´¥ attempt=%ld err=%@", (long)failCount, e ? e.localizedDescription : @"nil");
 
-            // 失败超过3次，静默跳过
+            // å¤±è´¥è¶è¿3æ¬¡ï¼éé»è·³è¿
 
             if (failCount >= 3) {
 
-                HBLog(@"[UCS] 通知授权连续失败3次，后续启动不再请求");
+                HBLog(@"[UCS] éç¥ææè¿ç»­å¤±è´¥3æ¬¡ï¼åç»­å¯å¨ä¸åè¯·æ±");
 
             }
 
@@ -1142,11 +1145,11 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
 
-    if (s == 0) return @"今日数据";
+    if (s == 0) return @"ä»æ¥æ°æ®";
 
-    if (s == 1) return @"操作";
+    if (s == 1) return @"æä½";
 
-    return @"定时生成";
+    return @"å®æ¶çæ";
 
 }
 
@@ -1158,7 +1161,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     if (s == 1) return 1;
 
-    // 定时生成section：生成时间 + 设置时间
+    // å®æ¶çæsectionï¼çææ¶é´ + è®¾ç½®æ¶é´
 
     return 2;
 
@@ -1190,9 +1193,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             cell.imageView.image = [UIImage systemImageNamed:@"figure.walk"];
 
-            cell.textLabel.text = @"步数";
+            cell.textLabel.text = @"æ­¥æ°";
 
-            cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld 步", self.steps];
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld æ­¥", self.steps];
 
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 
@@ -1200,11 +1203,11 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             cell.imageView.image = [UIImage systemImageNamed:@"ruler"];
 
-            cell.textLabel.text = @"距离";
+            cell.textLabel.text = @"è·ç¦»";
 
             double km = self.steps * self.ratio / 1000.0;
 
-            cell.detailTextLabel.text = [NSString stringWithFormat:@"%.3f 公里", km];
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"%.3f å¬é", km];
 
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
 
@@ -1212,9 +1215,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             cell.imageView.image = [UIImage systemImageNamed:@"stairs"];
 
-            cell.textLabel.text = @"楼层";
+            cell.textLabel.text = @"æ¥¼å±";
 
-            cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld 层", self.flights];
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld å±", self.flights];
 
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 
@@ -1226,7 +1229,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
         cell.imageView.tintColor = [UIColor systemGreenColor];
 
-        cell.textLabel.text = @"生成运动数据";
+        cell.textLabel.text = @"çæè¿å¨æ°æ®";
 
         cell.textLabel.textColor = [UIColor systemBlueColor];
 
@@ -1238,7 +1241,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             cell.imageView.image = [UIImage systemImageNamed:@"clock"];
 
-            cell.textLabel.text = @"每日自动生成";
+            cell.textLabel.text = @"æ¯æ¥èªå¨çæ";
 
             cell.detailTextLabel.text = nil;
 
@@ -1256,7 +1259,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             cell.imageView.image = [UIImage systemImageNamed:@"timer"];
 
-            cell.textLabel.text = @"生成时间";
+            cell.textLabel.text = @"çææ¶é´";
 
             cell.detailTextLabel.text = [NSString stringWithFormat:@"%02ld:%02ld", (long)self.schedHour, (long)self.schedMinute];
 
@@ -1278,21 +1281,21 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     if (ip.section == 0 && ip.row == 0) {
 
-        [self editIntegerWithTitle:@"步数" message:@"设置虚拟步数（在真实步数上累加）" current:self.steps handler:^(long v){
+        [self editIntegerWithTitle:@"æ­¥æ°" message:@"è®¾ç½®èææ­¥æ°ï¼å¨çå®æ­¥æ°ä¸ç´¯å ï¼" current:self.steps handler:^(long v){
 
             self.steps = v;
 
             [self saveSettings];
 
-            // 新逻辑（真实步数+虚拟步数）：保存即写入所有通道，
+            // æ°é»è¾ï¼çå®æ­¥æ°+èææ­¥æ°ï¼ï¼ä¿å­å³åå¥ææééï¼
 
-            // 微信侧 tweak 读到的是「虚拟步数增量」，显示 = 真实步数 + 该增量。
+            // å¾®ä¿¡ä¾§ tweak è¯»å°çæ¯ãèææ­¥æ°å¢éãï¼æ¾ç¤º = çå®æ­¥æ° + è¯¥å¢éã
 
             HBWriteStepsPreference(v);
 
             [self writeVirtualStepSample:v];
 
-            [self updateStatus:[NSString stringWithFormat:@"已生效：虚拟步数增量 %ld（微信显示 = 真实 + %ld；健康=真实+虚拟）", v, v]];
+            [self updateStatus:[NSString stringWithFormat:@"å·²çæï¼èææ­¥æ°å¢é %ldï¼å¾®ä¿¡æ¾ç¤º = çå® + %ldï¼å¥åº·=çå®+èæï¼", v, v]];
 
             [self.tableView reloadData];
 
@@ -1300,7 +1303,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     } else if (ip.section == 0 && ip.row == 2) {
 
-        [self editIntegerWithTitle:@"楼层" message:@"设置爬楼层数" current:self.flights handler:^(long v){ self.flights = v; [self saveSettings]; [self.tableView reloadData]; }];
+        [self editIntegerWithTitle:@"æ¥¼å±" message:@"è®¾ç½®ç¬æ¥¼å±æ°" current:self.flights handler:^(long v){ self.flights = v; [self saveSettings]; [self.tableView reloadData]; }];
 
     } else if (ip.section == 1) {
 
@@ -1328,9 +1331,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     }];
 
-    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:@"åæ¶" style:UIAlertActionStyleCancel handler:nil]];
 
-    [a addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act){
+    [a addAction:[UIAlertAction actionWithTitle:@"ç¡®å®" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act){
 
         long v = [a.textFields.firstObject.text integerValue];
 
@@ -1346,9 +1349,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 
 
-// 系统原生时间选择器：模态 UINavigationController 内放 UIDatePicker(.wheels) + 完成/取消。
+// ç³»ç»åçæ¶é´éæ©å¨ï¼æ¨¡æ UINavigationController åæ¾ UIDatePicker(.wheels) + å®æ/åæ¶ã
 
-// 旧版用 ActionSheet + 手写约束，布局错乱导致「确定」点不动；原生导航栏按钮最稳。
+// æ§çç¨ ActionSheet + æåçº¦æï¼å¸å±éä¹±å¯¼è´ãç¡®å®ãç¹ä¸å¨ï¼åçå¯¼èªæ æé®æç¨³ã
 
 - (void)pickTime {
 
@@ -1356,7 +1359,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     pickerVC.view.backgroundColor = [UIColor systemBackgroundColor];
 
-    pickerVC.title = @"选择生成时间";
+    pickerVC.title = @"éæ©çææ¶é´";
 
 
 
@@ -1394,7 +1397,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 
 
-    UIBarButtonItem *done = [[UIBarButtonItem alloc] initWithTitle:@"完成"
+    UIBarButtonItem *done = [[UIBarButtonItem alloc] initWithTitle:@"å®æ"
 
                                                             style:UIBarButtonItemStyleDone
 
@@ -1402,7 +1405,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
                                                            action:@selector(pickTimeDone:)];
 
-    UIBarButtonItem *cancel = [[UIBarButtonItem alloc] initWithTitle:@"取消"
+    UIBarButtonItem *cancel = [[UIBarButtonItem alloc] initWithTitle:@"åæ¶"
 
                                                               style:UIBarButtonItemStylePlain
 
@@ -1444,7 +1447,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
         [self.tableView reloadData];
 
-        [self updateStatus:[NSString stringWithFormat:@"已设置每日 %02ld:%02ld 生成", (long)self.schedHour, (long)self.schedMinute]];
+        [self updateStatus:[NSString stringWithFormat:@"å·²è®¾ç½®æ¯æ¥ %02ld:%02ld çæ", (long)self.schedHour, (long)self.schedMinute]];
 
     }
 
@@ -1474,11 +1477,11 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
         [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifiers:@[@"UCSDailyGen"]];
 
-        HBClearStepsFiles();   // 关闭定时：清掉微信的假步数，恢复真实
+        HBClearStepsFiles();   // å³é­å®æ¶ï¼æ¸æå¾®ä¿¡çåæ­¥æ°ï¼æ¢å¤çå®
 
     }
 
-    [self updateStatus:self.scheduleOn ? [NSString stringWithFormat:@"已开启每日 %02ld:%02ld 定时生成", (long)self.schedHour, (long)self.schedMinute] : @"已关闭定时"];
+    [self updateStatus:self.scheduleOn ? [NSString stringWithFormat:@"å·²å¼å¯æ¯æ¥ %02ld:%02ld å®æ¶çæ", (long)self.schedHour, (long)self.schedMinute] : @"å·²å³é­å®æ¶"];
 
 }
 
@@ -1496,7 +1499,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     content.title = @"UCS";
 
-    content.body = @"正在生成今日运动数据…";
+    content.body = @"æ­£å¨çæä»æ¥è¿å¨æ°æ®â¦";
 
     NSDateComponents *trig = [[NSDateComponents alloc] init];
 
@@ -1517,23 +1520,23 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center willPresentNotification:(UNNotification *)notification withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
-    // willPresentNotification: 在 App 处于后台/锁屏时被系统调用
-    // 此时不应自动触发生成（避免「未点按钮自动生成」）
+    // willPresentNotification: å¨ App å¤äºåå°/éå±æ¶è¢«ç³»ç»è°ç¨
+    // æ­¤æ¶ä¸åºèªå¨è§¦åçæï¼é¿åãæªç¹æé®èªå¨çæãï¼
     if ([notification.request.identifier isEqualToString:@"UCSDailyGen"]) {
-        HBLog(@"[UCS] willPresentNotification: 收到定时通知但 App 在后台，跳过自动生成");
+        HBLog(@"[UCS] willPresentNotification: æ¶å°å®æ¶éç¥ä½ App å¨åå°ï¼è·³è¿èªå¨çæ");
     }
     completionHandler(UNNotificationPresentationOptionNone);
 }
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void(^)(void))completionHandler {
     if ([response.notification.request.identifier isEqualToString:@"UCSDailyGen"]) {
-        // didReceiveNotificationResponse: 用户在通知上点击时触发
-        // 检查 App 是否之前在前台运行过（由 appWasActiveWhenStarted 标记）
+        // didReceiveNotificationResponse: ç¨æ·å¨éç¥ä¸ç¹å»æ¶è§¦å
+        // æ£æ¥ App æ¯å¦ä¹åå¨åå°è¿è¡è¿ï¼ç± appWasActiveWhenStarted æ è®°ï¼
         if (self.appWasActiveWhenStarted) {
             [self loadSettings];
             [self generateNow];
         } else {
-            HBLog(@"[UCS] didReceiveNotificationResponse: App 非前台状态，跳过自动生成");
+            HBLog(@"[UCS] didReceiveNotificationResponse: App éåå°ç¶æï¼è·³è¿èªå¨çæ");
         }
     }
     completionHandler();
@@ -1565,7 +1568,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     self.schedMinute = [d[@"minute"] integerValue]; if (self.schedMinute<0||self.schedMinute>59) self.schedMinute=0;
 
-    [self updateStatus:self.scheduleOn ? [NSString stringWithFormat:@"已就绪 · 每日 %02ld:%02ld 定时生成", (long)self.schedHour, (long)self.schedMinute] : @"已就绪"];
+    [self updateStatus:self.scheduleOn ? [NSString stringWithFormat:@"å·²å°±ç»ª Â· æ¯æ¥ %02ld:%02ld å®æ¶çæ", (long)self.schedHour, (long)self.schedMinute] : @"å·²å°±ç»ª"];
 
 }
 
@@ -1595,7 +1598,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
 
-    [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"ç¡®å®" style:UIAlertActionStyleDefault handler:nil]];
 
     [self presentViewController:alert animated:YES completion:nil];
 
@@ -1611,7 +1614,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     if (self.busy) return;
 
-    if (!self.enabled) { [self showAlert:@"已禁用" message:@"请先打开「启用」"]; return; }
+    if (!self.enabled) { [self showAlert:@"å·²ç¦ç¨" message:@"è¯·åæå¼ãå¯ç¨ã"]; return; }
 
     long steps = self.steps; if (steps < 0) steps = 0;
 
@@ -1623,15 +1626,15 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     HBWriteStepsPreference(steps);
 
-    // v2.2.6 修复：必须把虚拟步数写入 HealthKit，微信才能通过 HKStatistics 路径读到
+    // v2.2.6 ä¿®å¤ï¼å¿é¡»æèææ­¥æ°åå¥ HealthKitï¼å¾®ä¿¡æè½éè¿ HKStatistics è·¯å¾è¯»å°
     [self writeVirtualStepSample:steps];
 
 
     if (![HKHealthStore isHealthDataAvailable]) {
 
-        [self updateStatus:@"此设备不支持健康数据"];
+        [self updateStatus:@"æ­¤è®¾å¤ä¸æ¯æå¥åº·æ°æ®"];
 
-        [self showAlert:@"不支持" message:@"当前设备不可用 Apple Health"];
+        [self showAlert:@"ä¸æ¯æ" message:@"å½åè®¾å¤ä¸å¯ç¨ Apple Health"];
 
         return;
 
@@ -1639,7 +1642,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     self.busy = YES;
 
-    [self updateStatus:@"正在生成运动数据..."];
+    [self updateStatus:@"æ­£å¨çæè¿å¨æ°æ®..."];
 
     if (!self.healthStore) self.healthStore = [[HKHealthStore alloc] init];
 
@@ -1659,15 +1662,15 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
                 self.busy = NO;
 
-                [self updateStatus:@"健康授权失败"];
+                [self updateStatus:@"å¥åº·ææå¤±è´¥"];
 
-                [self showAlert:@"授权失败" message:error ? error.localizedDescription : @"授权失败"];
+                [self showAlert:@"ææå¤±è´¥" message:error ? error.localizedDescription : @"ææå¤±è´¥"];
 
                 return;
 
             }
 
-            [self updateStatus:@"正在写入健康数据..."];
+            [self updateStatus:@"æ­£å¨åå¥å¥åº·æ°æ®..."];
 
             [self fetchDeviceSourceRevision:^(HKSourceRevision *devRev) {
 
@@ -1805,9 +1808,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 
 
-        // v2.0.1 修复：检查是否已有真实设备步数（用户自己走路的）
+        // v2.0.1 ä¿®å¤ï¼æ£æ¥æ¯å¦å·²æçå®è®¾å¤æ­¥æ°ï¼ç¨æ·èªå·±èµ°è·¯çï¼
 
-        // 如果有，说明用户已经走路了，不应该覆盖真实数据
+        // å¦ææï¼è¯´æç¨æ·å·²ç»èµ°è·¯äºï¼ä¸åºè¯¥è¦ççå®æ°æ®
 
         BOOL hasRealDeviceSteps = NO;
 
@@ -1821,7 +1824,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             NSString *bid = src ? src.bundleIdentifier : nil;
 
-            // 设备源（bid=nil）或 Health App 源的样本
+            // è®¾å¤æºï¼bid=nilï¼æ Health App æºçæ ·æ¬
 
             if (bid == nil || [bid hasPrefix:@"com.apple.health."]) {
 
@@ -1835,7 +1838,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
                         hasRealDeviceSteps = YES;
 
-                        HBLog(@"[UCS] 发现真实设备步数 %.0f，跳过覆盖", stepVal);
+                        HBLog(@"[UCS] åç°çå®è®¾å¤æ­¥æ° %.0fï¼è·³è¿è¦ç", stepVal);
 
                         break;
 
@@ -1849,9 +1852,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
         if (hasRealDeviceSteps) {
 
-            // 已有真实数据，只需写入距离和楼层（不影响步数）
+            // å·²æçå®æ°æ®ï¼åªéåå¥è·ç¦»åæ¥¼å±ï¼ä¸å½±åæ­¥æ°ï¼
 
-            HBLog(@"[UCS] 已有真实步数，仅补充距离和楼层数据");
+            HBLog(@"[UCS] å·²æçå®æ­¥æ°ï¼ä»è¡¥åè·ç¦»åæ¥¼å±æ°æ®");
 
             NSDate *sampleNow = [NSDate date];
 
@@ -1859,9 +1862,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             HKQuantityType *flightType2 = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierFlightsClimbed];
 
-            // 先查询真实步数总和
+            // åæ¥è¯¢çå®æ­¥æ°æ»å
 
-            __block long realSteps = steps; // 默认用设置值
+            __block long realSteps = steps; // é»è®¤ç¨è®¾ç½®å¼
 
             HKStatisticsQuery *sumQ = [[HKStatisticsQuery alloc] initWithQuantityType:stepType
 
@@ -1881,9 +1884,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
                 double realDistance = realSteps * self.ratio;
 
-                HBLog(@"[UCS] 真实步数=%ld，距离=%.1f", realSteps, realDistance);
+                HBLog(@"[UCS] çå®æ­¥æ°=%ldï¼è·ç¦»=%.1f", realSteps, realDistance);
 
-                // 写入距离
+                // åå¥è·ç¦»
 
                 HKQuantity *distQ = [HKQuantity quantityWithUnit:[HKUnit meterUnit] doubleValue:realDistance];
 
@@ -1901,9 +1904,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
                 [self saveSamplePrivately:distSample completion:^(BOOL ok, NSError *e) {
 
-                    HBLog(@"[UCS] 距离写入: ok=%d", ok);
+                    HBLog(@"[UCS] è·ç¦»åå¥: ok=%d", ok);
 
-                    // 写入楼层
+                    // åå¥æ¥¼å±
 
                     HKQuantity *flightQ = [HKQuantity quantityWithUnit:[HKUnit countUnit] doubleValue:flights];
 
@@ -1921,7 +1924,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
                     [self saveSamplePrivately:flightSample completion:^(BOOL ok2, NSError *e2) {
 
-                        HBLog(@"[UCS] 楼层写入: ok=%d", ok2);
+                        HBLog(@"[UCS] æ¥¼å±åå¥: ok=%d", ok2);
 
                         [self writeVirtualStepSample:steps];
 
@@ -1977,9 +1980,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
         __weak typeof(self) weakSelf = self;
 
-        // 修复(V2.0.2)：绝不删除真实设备/健康样本，仅清掉本 App 之前写的合成样本
+        // ä¿®å¤(V2.0.2)ï¼ç»ä¸å é¤çå®è®¾å¤/å¥åº·æ ·æ¬ï¼ä»æ¸ææ¬ App ä¹ååçåææ ·æ¬
 
-        // （HBSyntheticStepMetaKey 标记），避免真实步数被抹。原逻辑会 deleteObject 设备/健康源样本。
+        // ï¼HBSyntheticStepMetaKey æ è®°ï¼ï¼é¿åçå®æ­¥æ°è¢«æ¹ãåé»è¾ä¼ deleteObject è®¾å¤/å¥åº·æºæ ·æ¬ã
 
         NSMutableArray *oldSynthetic = [NSMutableArray array];
 
@@ -2041,11 +2044,11 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
     unsigned int nargs = m ? method_getNumberOfArguments(m) : 0;
 
-    HBLog(@"[UCS] _saveObjects 参数个数=%u (期望 6)", nargs);
+    HBLog(@"[UCS] _saveObjects åæ°ä¸ªæ°=%u (ææ 6)", nargs);
 
     if (!m || nargs != 6) {
 
-        HBLog(@"[UCS] 私有 save 不可用，退回公开 saveObject");
+        HBLog(@"[UCS] ç§æ save ä¸å¯ç¨ï¼éåå¬å¼ saveObject");
 
         [self.healthStore saveObject:sample withCompletion:completion];
 
@@ -2079,11 +2082,11 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
         [inv invokeWithTarget:self.healthStore];
 
-        HBLog(@"[UCS] 已用私有 _saveObjects(skipInsertionFilter:YES) 提交");
+        HBLog(@"[UCS] å·²ç¨ç§æ _saveObjects(skipInsertionFilter:YES) æäº¤");
 
     } @catch (NSException *e) {
 
-        HBLog(@"[UCS] 私有 save 异常: %@ -> 退回公开 API", e);
+        HBLog(@"[UCS] ç§æ save å¼å¸¸: %@ -> éåå¬å¼ API", e);
 
         [self.healthStore saveObject:sample withCompletion:completion];
 
@@ -2117,7 +2120,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
         double v = sum ? [sum doubleValueForUnit:[HKUnit countUnit]] : 0;
 
-        HBLog(@"[UCS] VERIFY 当天步数总和 = %.0f", v);
+        HBLog(@"[UCS] VERIFY å½å¤©æ­¥æ°æ»å = %.0f", v);
 
         HKSampleQuery *sq = [[HKSampleQuery alloc] initWithSampleType:stepType
 
@@ -2129,7 +2132,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
                                                        resultsHandler:^(HKSampleQuery *q2, NSArray *results2, NSError *e2) {
 
-            HBLog(@"[UCS] VERIFY 当天样本条数 = %lu", (unsigned long)(results2 ?: @[]).count);
+            HBLog(@"[UCS] VERIFY å½å¤©æ ·æ¬æ¡æ° = %lu", (unsigned long)(results2 ?: @[]).count);
 
             for (HKSample *s in (results2 ?: @[])) {
 
@@ -2141,7 +2144,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
                     double sv = [qs.quantity doubleValueForUnit:[HKUnit countUnit]];
 
-                    HBLog(@"[UCS] VERIFY 样本: %.0f 步, 来源=%@", sv, bid ?: @"(nil=设备源)");
+                    HBLog(@"[UCS] VERIFY æ ·æ¬: %.0f æ­¥, æ¥æº=%@", sv, bid ?: @"(nil=è®¾å¤æº)");
 
                 }
 
@@ -2159,15 +2162,15 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 
 
-// v2.0.x：把「虚拟步数增量」写成【合成步数样本】写进 Health，
+// v2.0.xï¼æãèææ­¥æ°å¢éãåæãåææ­¥æ°æ ·æ¬ãåè¿ Healthï¼
 
-// 使系统「健康」App 也显示 真实+虚拟（a = 真实设备步数 + 此增量）。
+// ä½¿ç³»ç»ãå¥åº·ãApp ä¹æ¾ç¤º çå®+èæï¼a = çå®è®¾å¤æ­¥æ° + æ­¤å¢éï¼ã
 
-// 注意写的是【增量 v】，Health 会把真实步数与此增量求和得到 a；微信 tweak 已改直通，
+// æ³¨æåçæ¯ãå¢é vãï¼Health ä¼æçå®æ­¥æ°ä¸æ­¤å¢éæ±åå¾å° aï¼å¾®ä¿¡ tweak å·²æ¹ç´éï¼
 
-// 直接读 Health 原值，不会双重加。每次先用 metadata 标识删掉旧合成样本再写新，
+// ç´æ¥è¯» Health åå¼ï¼ä¸ä¼åéå ãæ¯æ¬¡åç¨ metadata æ è¯å ææ§åææ ·æ¬ååæ°ï¼
 
-// 避免逐次设置累加。
+// é¿åéæ¬¡è®¾ç½®ç´¯å ã
 
 static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
 
@@ -2175,7 +2178,7 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
 
 - (void)writeVirtualStepSample:(long)virtualSteps {
 
-    if (![HKHealthStore isHealthDataAvailable]) { HBLog(@"[UCS] 不支持健康，跳过合成步数写入"); return; }
+    if (![HKHealthStore isHealthDataAvailable]) { HBLog(@"[UCS] ä¸æ¯æå¥åº·ï¼è·³è¿åææ­¥æ°åå¥"); return; }
 
     if (!self.healthStore) self.healthStore = [[HKHealthStore alloc] init];
 
@@ -2199,22 +2202,22 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
 
                                                      resultsHandler:^(HKSampleQuery *q, NSArray *results, NSError *e) {
 
-            // v2.2.7：用 dispatch_group 并行删旧样本，避免同步循环里每次 deleteObject 都等完成再删下一个
+            // v2.2.7ï¼ç¨ dispatch_group å¹¶è¡å æ§æ ·æ¬ï¼é¿ååæ­¥å¾ªç¯éæ¯æ¬¡ deleteObject é½ç­å®æåå ä¸ä¸ä¸ª
             dispatch_group_t group = dispatch_group_create();
             NSArray *samples = results ?: @[];
-            __block BOOL groupEntered = NO; // 追踪是否有任何 enter，防止无样本时 dispatch_after 导致下溢
+            __block BOOL groupEntered = NO; // è¿½è¸ªæ¯å¦æä»»ä½ enterï¼é²æ­¢æ æ ·æ¬æ¶ dispatch_after å¯¼è´ä¸æº¢
             for (HKSample *s in samples) {
                 if ([s.metadata[HBSyntheticStepMetaKey] boolValue]) {
                     groupEntered = YES;
                     dispatch_group_enter(group);
                     [self.healthStore deleteObject:s withCompletion:^(BOOL ok, NSError *e2){
-                        HBLog(@"[UCS] 删除旧合成步数样本 ok=%d", ok);
+                        HBLog(@"[UCS] å é¤æ§åææ­¥æ°æ ·æ¬ ok=%d", ok);
                         dispatch_group_leave(group);
                     }];
                 }
             }
 
-            // 仅在确实有 enter 时才设超时兜底，避免组计数器下溢
+            // ä»å¨ç¡®å®æ enter æ¶æè®¾è¶æ¶ååºï¼é¿åç»è®¡æ°å¨ä¸æº¢
             if (groupEntered) {
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                     dispatch_group_leave(group);
@@ -2231,10 +2234,10 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
                                                                                    device:[HKDevice localDevice]
                                                                                  metadata:@{HBSyntheticStepMetaKey: @YES}];
                     [self saveSamplePrivately:sample completion:^(BOOL ok, NSError *e3){
-                        HBLog(@"[UCS] 写入合成步数(增量)%ld ok=%d", virtualSteps, ok);
+                        HBLog(@"[UCS] åå¥åææ­¥æ°(å¢é)%ld ok=%d", virtualSteps, ok);
                     }];
                 } else {
-                    HBLog(@"[UCS] 虚拟步数=0，仅清理旧合成样本");
+                    HBLog(@"[UCS] èææ­¥æ°=0ï¼ä»æ¸çæ§åææ ·æ¬");
                 }
             });
 
@@ -2248,9 +2251,9 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
 
 - (void)_writeSteps:(long)steps dist:(double)distM flights:(long)flights deviceRev:(HKSourceRevision *)deviceRev index:(NSUInteger)index {
 
-    // 步数改由 writeVirtualStepSample 以【合成样本(虚拟增量)】写入 Health，
+    // æ­¥æ°æ¹ç± writeVirtualStepSample ä»¥ãåææ ·æ¬(èæå¢é)ãåå¥ Healthï¼
 
-    // 这里不再写设备步数样本，避免与真实设备步数及合成样本重复/双重叠加。
+    // è¿éä¸ååè®¾å¤æ­¥æ°æ ·æ¬ï¼é¿åä¸çå®è®¾å¤æ­¥æ°ååææ ·æ¬éå¤/åéå å ã
 
     if (index == 0) {
 
@@ -2340,16 +2343,16 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
 
     self.busy = NO;
 
-    // 记录「今天已生成」，避免重复生成（定时/手动触发后写入）
+    // è®°å½ãä»å¤©å·²çæãï¼é¿åéå¤çæï¼å®æ¶/æå¨è§¦åååå¥ï¼
 
     [HBTodayString() writeToFile:HBLastGenPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
-    // v2.2.7：生成成功后再保存设置，避免 generateNow 开头过早写入默认值覆盖用户设置
+    // v2.2.7ï¼çææåååä¿å­è®¾ç½®ï¼é¿å generateNow å¼å¤´è¿æ©åå¥é»è®¤å¼è¦çç¨æ·è®¾ç½®
     [self saveSettings];
 
-    [self updateStatus:@"运动数据已生成"];
+    [self updateStatus:@"è¿å¨æ°æ®å·²çæ"];
 
-    [self showAlert:@"运动数据已生成" message:@""];
+    [self showAlert:@"è¿å¨æ°æ®å·²çæ" message:@""];
 
 }
 
@@ -2361,11 +2364,11 @@ static NSString *const HBSyntheticStepMetaKey = @"com.sykes.ucs.virtualStep";
 
     self.busy = NO;
 
-    [self updateStatus:@"写入失败"];
+    [self updateStatus:@"åå¥å¤±è´¥"];
 
-    NSString *msg = error ? error.localizedDescription : @"未知错误";
+    NSString *msg = error ? error.localizedDescription : @"æªç¥éè¯¯";
 
-    [self showAlert:@"写入失败" message:msg];
+    [self showAlert:@"åå¥å¤±è´¥" message:msg];
 
 }
 
