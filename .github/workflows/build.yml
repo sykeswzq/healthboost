@@ -36,92 +36,92 @@ jobs:
           DEB=$(ls com.sykes.ucs_*_iphoneos-arm64e.deb | head -1)
           echo "deb file: $DEB"
 
-          echo "=== (1) deb 内路径必须是根相对 ./Applications/（roothide 范式）==="
-          # 用 dpkg-deb -c 列出内容；若存在 ./var/jb 或 ./var/roothide 前缀则视为错误
+          echo "=== (1) deb path must use relative ./Applications/ (roothide style) ==="
+          # Use dpkg-deb -c to list contents; error if ./var/jb or ./var/roothide prefix found
           if dpkg-deb -c "$DEB" | grep -E '\./var/(jb|roothide)/' ; then
-            echo "ERROR: 检测到 ./var/jb 或 ./var/roothide 前缀路径，roothide 上 dpkg 会报 No such file"
+            echo "ERROR: Detected ./var/jb or ./var/roothide prefix path, roothide dpkg will report No such file"
             exit 1
           fi
           if ! dpkg-deb -c "$DEB" | grep -E '\./Applications/UCS\.app/HealthBoostApp' ; then
-            echo "ERROR: 未找到 ./Applications/UCS.app/HealthBoostApp，打包路径错误"
+            echo "ERROR: ./Applications/UCS.app/HealthBoostApp not found, packaging path error"
             exit 1
           fi
-          echo "  (1) OK: 路径为根相对 ./Applications/"
+          echo "  (1) OK: path is relative root ./Applications/"
 
-          echo "=== (2) 展开校验二进制签名/entitlements ==="
+          echo "=== (2) Expand and verify binary signature/entitlements ==="
           rm -rf /tmp/hbcheck && mkdir -p /tmp/hbcheck
           dpkg-deb -x "$DEB" /tmp/hbcheck
           APPBIN=/tmp/hbcheck/Applications/UCS.app/HealthBoostApp
           if [ ! -f "$APPBIN" ]; then
-            echo "ERROR: 解包后找不到 $APPBIN"
+            echo "ERROR: Cannot find $APPBIN after extraction"
             exit 1
           fi
 
-          echo "  (2a) Mach-O 头必须是 fat (cafebabe)"
+          echo "  (2a) Mach-O header must be fat (cafebabe)"
           magic=$(xxd -p -l4 "$APPBIN" | tr -d '\n')
           if [ "$magic" != "cafebabe" ]; then
-            echo "ERROR: 二进制 Mach-O 头异常 (magic=$magic)，签名/打包损坏"
+            echo "ERROR: Binary Mach-O header invalid (magic=$magic), signature/packaging corrupted"
             exit 1
           fi
           echo "  (2a) OK: magic=$magic"
 
-          echo "  (2b) entitlements 必须含 no-sandbox 与 healthkit"
+          echo "  (2b) entitlements must contain no-sandbox and healthkit"
           ENT=$(ldid -e "$APPBIN" 2>/dev/null || true)
           if ! echo "$ENT" | grep -q "no-sandbox"; then
-            echo "ERROR: 签名缺少 com.apple.private.security.no-sandbox（roothide 必需）"
+            echo "ERROR: Signature missing com.apple.private.security.no-sandbox (required for roothide)"
             exit 1
           fi
           if ! echo "$ENT" | grep -q "healthkit"; then
-            echo "ERROR: 签名缺少 healthkit 权限（App 无法写入健康数据）"
+            echo "ERROR: Signature missing healthkit permission (App cannot write health data)"
             exit 1
           fi
-          echo "  (2b) OK: no-sandbox + healthkit 均存在"
+          echo "  (2b) OK: no-sandbox + healthkit both present"
 
-          echo "=== (3) Info.plist 关键字段 ==="
+          echo "=== (3) Info.plist key fields ==="
           PLIST=/tmp/hbcheck/Applications/UCS.app/Info.plist
           if ! /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST" 2>/dev/null | grep -q "HealthBoostApp"; then
-            echo "ERROR: Info.plist CFBundleExecutable 不是 HealthBoostApp"
+            echo "ERROR: Info.plist CFBundleExecutable is not HealthBoostApp"
             exit 1
           fi
-          # 不应引用不存在的 storyboard
+          # Should not reference non-existent storyboard
           if /usr/libexec/PlistBuddy -c "Print :UIMainStoryboardFile" "$PLIST" 2>/dev/null | grep -q "Main"; then
-            echo "ERROR: Info.plist 引用了不存在的 Main.storyboard"
+            echo "ERROR: Info.plist references non-existent Main.storyboard"
             exit 1
           fi
-          echo "  (3) OK: CFBundleExecutable=HealthBoostApp，无 storyboard 引用"
+          echo "  (3) OK: CFBundleExecutable=HealthBoostApp, no storyboard reference"
 
-          echo "=== 全部校验通过，可安全发布 ==="
+          echo "=== All verifications passed, safe to publish ==="
 
       - name: Verify StepFaker tweak embedded in single deb
         run: |
           set -e
           TDBIN=/tmp/hbcheck/Library/MobileSubstrate/DynamicLibraries/StepFaker.dylib
           TDPLIST=/tmp/hbcheck/Library/MobileSubstrate/DynamicLibraries/StepFaker.plist
-          if [ ! -f "$TDBIN" ]; then echo "ERROR: 单 deb 内未找到 StepFaker.dylib"; exit 1; fi
-          if [ ! -f "$TDPLIST" ]; then echo "ERROR: 单 deb 内未找到 StepFaker.plist"; exit 1; fi
-          echo "  (1) OK: 单 deb 内含 tweak dylib + plist（根相对 ./Library/MobileSubstrate/）"
+          if [ ! -f "$TDBIN" ]; then echo "ERROR: StepFaker.dylib not found in single deb"; exit 1; fi
+          if [ ! -f "$TDPLIST" ]; then echo "ERROR: StepFaker.plist not found in single deb"; exit 1; fi
+          echo "  (1) OK: single deb contains tweak dylib + plist (relative root ./Library/MobileSubstrate/)"
 
-          echo "  (2a) dylib Mach-O 头必须是 fat (cafebabe)"
+          echo "  (2a) dylib Mach-O header must be fat (cafebabe)"
           tmagic=$(xxd -p -l4 "$TDBIN" | tr -d '\n')
           if [ "$tmagic" != "cafebabe" ]; then
-            echo "ERROR: dylib Mach-O 头异常 (magic=$tmagic)"
+            echo "ERROR: dylib Mach-O header invalid (magic=$tmagic)"
             exit 1
           fi
           echo "  (2a) OK: magic=$tmagic"
 
-          echo "  (2b) filter 必须包含微信（com.tencent.xin），严禁通配"
+          echo "  (2b) filter must include WeChat (com.tencent.xin), wildcard forbidden"
           if ! /usr/libexec/PlistBuddy -c "Print :Filter:Bundles" "$TDPLIST" 2>/dev/null | grep -q "com.tencent.xin"; then
-            echo "ERROR: filter 未包含 com.tencent.xin（微信）"
+            echo "ERROR: filter does not include com.tencent.xin (WeChat)"
             exit 1
           fi
-          # 严禁通配：不允许 Executables 通配或 Bundle 含 * 号
+          # Wildcard forbidden: Executables wildcard or Bundle containing * not allowed
           if /usr/libexec/PlistBuddy -c "Print" "$TDPLIST" 2>/dev/null | grep -qE '\*'; then
-            echo "ERROR: filter 含通配符，会注入所有进程（危险）"
+            echo "ERROR: filter contains wildcard, will inject all processes (dangerous)"
             exit 1
           fi
-          echo "  (2b) OK: 仅注入 com.tencent.xin（微信），无通配"
+          echo "  (2b) OK: only injects com.tencent.xin (WeChat), no wildcard"
 
-          echo "=== 单 deb 内 tweak 校验通过，可安全发布 ==="
+          echo "=== Single deb tweak verification passed, safe to publish ==="
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
