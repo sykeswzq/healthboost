@@ -896,6 +896,8 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
 @property (assign, nonatomic) BOOL busy;
 
+@property (assign, nonatomic) BOOL appWasActiveWhenStarted;
+
 @property (strong, nonatomic) HKHealthStore *healthStore;
 
 @property (strong, nonatomic) UILabel *statusLabel;
@@ -950,6 +952,13 @@ static HKQuantitySample *HBMakeDeviceSample(HKQuantityType *type,
 
     HBLog(@"[UCS] App 启动");
 
+}
+
+- (void)applicationWillResignActive:(UIApplication *)application {
+    // v2.2.17：重置前台标记，防止后台收到通知时误触发生成
+    self.appWasActiveWhenStarted = NO;
+    self.busy = NO;
+    HBLog(@"[UCS] applicationWillResignActive: 重置 appWasActiveWhenStarted");
 }
 
 - (void)dealloc {
@@ -1281,15 +1290,13 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
             [self saveSettings];
 
-            // 新逻辑（真实步数+虚拟步数）：保存即写入所有通道，
-
-            // 微信侧 tweak 读到的是「虚拟步数增量」，显示 = 真实步数 + 该增量。
+            // v2.2.17：保存只写文件通道，不写 HealthKit。
+            // 微信通过 tweak 读文件通道得到增量；健康 App 只读 HealthKit 不受影响。
+            // 点击"生成"按钮才写 HealthKit，确保两步操作明确分离。
 
             HBWriteStepsPreference(v);
 
-            [self writeVirtualStepSample:v];
-
-            [self updateStatus:[NSString stringWithFormat:@"已生效：虚拟步数增量 %ld（微信显示 = 真实 + %ld；健康=真实+虚拟）", v, v]];
+            [self updateStatus:[NSString stringWithFormat:@"已生效：虚拟步数增量 %ld（微信下次刷新可见）", v]];
 
             [self.tableView reloadData];
 
@@ -1515,7 +1522,13 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center willPresentNotification:(UNNotification *)notification withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
     if ([notification.request.identifier isEqualToString:@"UCSDailyGen"]) {
-        [self loadSettings];   // App 挂起恢复时 viewDidLoad 不会重跑，先刷新磁盘设置
+        // v2.2.17：App 在后台时跳过自动生成，避免误触发
+        if (!self.appWasActiveWhenStarted) {
+            HBLog(@"[UCS] willPresentNotification: App 在后台，跳过自动生成");
+            completionHandler(UNNotificationPresentationOptionNone);
+            return;
+        }
+        [self loadSettings];
         [self generateNow];
     }
     completionHandler(UNNotificationPresentationOptionNone);
@@ -1523,6 +1536,12 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void(^)(void))completionHandler {
     if ([response.notification.request.identifier isEqualToString:@"UCSDailyGen"]) {
+        // v2.2.17：App 在后台时跳过自动生成
+        if (!self.appWasActiveWhenStarted) {
+            HBLog(@"[UCS] didReceiveNotificationResponse: App 在后台，跳过自动生成");
+            completionHandler();
+            return;
+        }
         [self loadSettings];
         [self generateNow];
     }
@@ -1538,13 +1557,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (void)loadSettings {
 
     NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:HBSettingsKey];
-<<<<<<< HEAD
-
     if (!d) d = @{@"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};
-
-=======
-    if (!d) d = @{@"steps":@1000, @"ratio":@0.7, @"flights":@5, @"scheduleOn":@NO, @"hour":@9, @"minute":@0};
->>>>>>> v2.2.16-real-virtual
     self.steps = [d[@"steps"] longValue]; if (self.steps <= 0) self.steps = 1000;
 
     self.ratio = [d[@"ratio"] doubleValue]; if (self.ratio<0.5) self.ratio=0.5; if (self.ratio>0.8) self.ratio=0.8;
