@@ -1577,13 +1577,9 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 
 
 - (void)saveSettings {
-<<<<<<< HEAD
 
     NSDictionary *d = @{@"steps":@(self.steps), @"ratio":@(self.ratio), @"flights":@(self.flights), @"scheduleOn":@(self.scheduleOn), @"hour":@(self.schedHour), @"minute":@(self.schedMinute)};
 
-=======
-    NSDictionary *d = @{@"steps":@(self.steps), @"ratio":@(self.ratio), @"flights":@(self.flights), @"scheduleOn":@(self.scheduleOn), @"hour":@(self.schedHour), @"minute":@(self.schedMinute)};
->>>>>>> v2.2.16-real-virtual
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
 
     [ud setObject:d forKey:HBSettingsKey];
@@ -1619,10 +1615,7 @@ static NSString * const HBNotifRequestedKey = @"hb_notif_requested";
 - (void)generateNow {
 
     if (self.busy) return;
-<<<<<<< HEAD
 
-=======
->>>>>>> v2.2.16-real-virtual
     long steps = self.steps; if (steps < 0) steps = 0;
 
     double distanceMeters = steps * self.ratio;

@@ -12,15 +12,9 @@ set -euo pipefail
 #   3) Use ldid -M -S<entitlements> for signing (official method)
 #   4) Entitlements must include roothide 4 basic permissions + healthkit private permission
 
-<<<<<<< HEAD
-# Version: v2.2.16 (移除启用开关，默认始终启用，仅手动生成按钮触发步数)
-VER="2.2.16"
+# Version: v2.2.17 (移除启用开关，默认始终启用，仅手动生成按钮触发步数)
+VER="2.2.17"
 echo "Version: $VER"
-=======
-# 版本号：v2.0 最终版
-VER="2.2.16"
-echo "版本号: $VER"
->>>>>>> v2.2.16-real-virtual
 PKG="com.sykes.ucs"
 OUT="${PKG}_${VER}_iphoneos-arm64e.deb"
 
