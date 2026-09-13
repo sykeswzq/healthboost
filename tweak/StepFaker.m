@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 // StepFaker —— 干净的注入式 tweak（微信步数：真实步数 + 虚拟步数）
 //
 // 设计：
@@ -708,45 +707,6 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     HBRawLog("P8_WECHAT after CoreMotion");
     HBRawLog("P9_DONE_WECHAT");
 }
-=======
-// StepFaker —— 干净的注入式 tweak（微信步数伪造）
-//
-// 设计：
-//  - 仅注入 com.tencent.xin（微信）。
-//  - 微信步数伪造逻辑（已验证可用）：
-//      * CMPedometerData.numberOfSteps（主通道）
-//      * HKStatistics sumQuantity/averageQuantity（备用通道）
-//      * HKSampleQuery 逐样本查询（备用通道）
-//  - 日志写到两处：全局 /var/mobile/hb_probe_<bundle>.log（最好找）+ App 沙盒 Documents/hb_probe.log。
-//  - 所有文件写入都在主线程起来之后进行，constructor 内不做任何 IO，避免极早期 IO 引发不稳。
-//
-// 编译：xcrun --sdk iphoneos clang -dynamiclib -fobjc-arc \
-//   -framework Foundation -framework CoreFoundation -framework CoreMotion -framework HealthKit \
-//   -arch arm64 -arch arm64e -mios-version-min=13.0 -isysroot $SDK -o StepFaker.dylib tweak/StepFaker.m
-// 签名：ldid -M -S StepFaker.dylib
-
-#import <objc/runtime.h>
-#import <Foundation/Foundation.h>
-#import <CoreFoundation/CoreFoundation.h>
-#import <dispatch/dispatch.h>
-#import <CoreMotion/CoreMotion.h>
-#import <HealthKit/HealthKit.h>
-#include <dlfcn.h>
-#include <string.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <time.h>
-#include <sys/time.h>
-
-// ============================================================================
-// hook API：优先用 CydiaSubstrate / ElleKit 的 MSHookMessageEx
-// ----------------------------------------------------------------------------
-// 为什么必须改：arm64e（iPhone 14 Pro 的 A16）带 PAC 指针认证。objc_msgSend
-// 派发方法时会对 IMP 做 ptrauth 校验，直接把裸 C 函数指针塞给
-// method_setImplementation，签名不符就会崩。
 // 实测取证：搬运工源里可用的步数修改插件其未定义符号里明确带 _MSHookMessageEx，
 // 而它能在 arm64e 上正常跑。CI（macOS runner）没有 CydiaSubstrate 可链接，故用 dlsym 在运行时解析；
 // 设备上 Substrate/ElleKit 必然已加载，能取到；取不到再回退原生 runtime。
@@ -1358,4 +1318,3 @@ __attribute__((constructor)) static void StepFakerInit(void) {
     HBRawLog("P8_WECHAT after CoreMotion");
     HBRawLog("P9_DONE_WECHAT");
 }
->>>>>>> v2.2.16-real-virtual
